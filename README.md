@@ -3,7 +3,7 @@ This connector plug a VMWare infrastructure with infrastructure extension.
 
 It will be soon integrated on Clouddesigner project as it is in early development.
 
-# How to use this connector 
+## How to use this connector 
 For use, you must replace "dummy connector" by this one.
 
 Infrastructure extension is the extension model for this connector, you can design a compute and launch it on VMWare VCenter.
@@ -14,5 +14,5 @@ Usage with template : set the attribute "summary" with the name of your template
 
 Don't forget to add your credentials in src/resources/credential.properties before using this connector.
 
-# Supported version of VMWare vcenter
+## Supported version of VMWare vcenter
 The version 6.0, and all older version 5.5, 5.0, 4.1 etc. (ESX and ESXi).
