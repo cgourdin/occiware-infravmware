@@ -12,6 +12,7 @@ Two modes are supported now, the creation of virtual machine without virtual mac
 
 Usage with template : set the attribute "summary" with the name of your template and the connector will clone the template on your compute without taking account of other fields (like cpu, memory etc.), set the title as it represent the name of your virtual machine.
 
+Don't forget to add your credentials in src/resources/credential.properties before using this connector.
+
 # Supported version of VMWare vcenter
 The version 6.0, and all older version 5.5, 5.0, 4.1 etc. (ESX and ESXi).
-
