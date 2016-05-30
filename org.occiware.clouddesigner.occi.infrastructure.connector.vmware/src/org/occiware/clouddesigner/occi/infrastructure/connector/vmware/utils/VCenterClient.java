@@ -139,4 +139,24 @@ public class VCenterClient {
 		return result;
 	}
 	
+	/**
+	 * if vcenter client connection is not set, this method will connect to
+	 * vcenter.
+	 */
+	public static boolean checkConnection() {
+		if (!isConnected()) {
+			try {
+				init();
+				connect();
+				return true;
+			} catch (IOException ex) {
+				ex.printStackTrace();
+				return false;
+			}
+		} else {
+			return true;
+		}
+
+	}
+	
 }
