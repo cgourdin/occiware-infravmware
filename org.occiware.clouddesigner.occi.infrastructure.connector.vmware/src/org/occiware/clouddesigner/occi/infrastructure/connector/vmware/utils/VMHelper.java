@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory;
 
 import com.vmware.vim25.Description;
 import com.vmware.vim25.RuntimeFault;
+import com.vmware.vim25.ToolsConfigInfo;
 import com.vmware.vim25.VirtualDeviceConfigSpec;
 import com.vmware.vim25.VirtualDeviceConfigSpecFileOperation;
 import com.vmware.vim25.VirtualDeviceConfigSpecOperation;
@@ -20,6 +21,7 @@ import com.vmware.vim25.VirtualLsiLogicController;
 import com.vmware.vim25.VirtualMachineConfigSpec;
 import com.vmware.vim25.VirtualMachinePowerState;
 import com.vmware.vim25.VirtualMachineQuickStats;
+import com.vmware.vim25.VirtualMachineToolsStatus;
 import com.vmware.vim25.VirtualPCNet32;
 import com.vmware.vim25.VirtualSCSISharing;
 import com.vmware.vim25.mo.Folder;
@@ -38,7 +40,7 @@ import com.vmware.vim25.mo.VirtualMachine;
 public class VMHelper {
 
 	private static Logger LOGGER = LoggerFactory.getLogger(VMHelper.class);
-	
+
 	/**
 	 * The virtual machine is currently powered off.
 	 */
@@ -51,8 +53,7 @@ public class VMHelper {
 	 * The virtual machine is currently suspended.
 	 */
 	public static final String SUSPENDED = "suspended";
-	 
-	
+
 	/**
 	 * Search for a VirtualMachine on tree folder for a name.
 	 * 
@@ -424,7 +425,7 @@ public class VMHelper {
 		if (vm != null) {
 			VirtualMachineQuickStats qstats = vm.getSummary().getQuickStats();
 			// In MHz.
-			Integer cpuSpeedDemand = vm.getSummary().getQuickStats().getOverallCpuDemand(); 
+			Integer cpuSpeedDemand = qstats.getOverallCpuDemand();
 			// In Ghz.
 			cpuSpeed = cpuSpeedDemand.floatValue() / 1000;
 		}
@@ -433,10 +434,11 @@ public class VMHelper {
 	}
 
 	/**
-	 * Get the state of this compute (VMWare format).
-	 * poweredOff The virtual machine is currently powered off.
-	 * poweredOn The virtual machine is currently powered on.
-	 * suspended The virtual machine is currently suspended.
+	 * Get the state of this compute (VMWare format). poweredOff The virtual
+	 * machine is currently powered off. poweredOn The virtual machine is
+	 * currently powered on. suspended The virtual machine is currently
+	 * suspended.
+	 * 
 	 * @param vm
 	 * @return a String
 	 */
@@ -448,15 +450,14 @@ public class VMHelper {
 		}
 		return state;
 	}
-	
+
 	/**
-	 * Operation mode of guest operating system, via guestInfo.
-	 * "running" - Guest is running normally.
-	 * "shuttingdown" - Guest has a pending shutdown command.
-	 * "resetting" - Guest has a pending reset command.
-	 * "standby" - Guest has a pending standby command.
-	 * "notrunning" - Guest is not running.
+	 * Operation mode of guest operating system, via guestInfo. "running" -
+	 * Guest is running normally. "shuttingdown" - Guest has a pending shutdown
+	 * command. "resetting" - Guest has a pending reset command. "standby" -
+	 * Guest has a pending standby command. "notrunning" - Guest is not running.
 	 * "unknown" - Guest information is not available.
+	 * 
 	 * @param vm
 	 * @return
 	 */
@@ -467,9 +468,10 @@ public class VMHelper {
 		}
 		return state;
 	}
-	
+
 	/**
 	 * Get the guest hostname if known.
+	 * 
 	 * @param vm
 	 * @return if the guest hostname is not known, this may return null.
 	 */
@@ -480,5 +482,413 @@ public class VMHelper {
 		}
 		return hostname;
 	}
+
+	/**
+	 * Check if hot add pluging is enabled for CPU
+	 *
+	 * @param vmname
+	 * @return
+	 * @throws InvalidProperty
+	 * @throws RuntimeFault
+	 * @throws RemoteException
+	 */
+	public Boolean getHotAddCPU(final VirtualMachine vm) throws RemoteException {
+		return vm.getConfig().getCpuHotAddEnabled();
+	}
+
+	/**
+	 * Check if hot add plugin is enabled for Memory
+	 *
+	 * @param vm
+	 * @return
+	 * @throws InvalidProperty
+	 * @throws RuntimeFault
+	 * @throws RemoteException
+	 */
+	public Boolean getHotAddMemory(final VirtualMachine vm) throws RemoteException {
+		return vm.getConfig().getMemoryHotAddEnabled();
+	}
+
+	/**
+	 * Enable Hot Add plugin - need Stop and Start task
+	 *
+	 * @param vm
+	 * @throws InvalidProperty
+	 * @throws RuntimeFault
+	 * @throws RemoteException
+	 */
+	public static void enableVmHotAddPlugin(final VirtualMachine vm) throws RemoteException {
+		VirtualMachineConfigSpec changeSpec = new VirtualMachineConfigSpec();
+		Task task = null;
+		boolean retVal = false;
+		String vmName = vm.getName();
+
+		String lastPowerState = getPowerState(vm);
+
+		if (!vm.getConfig().getCpuHotAddEnabled() || !vm.getConfig().getMemoryHotAddEnabled()) {
+			task = vm.powerOffVM_Task();
+			if (task != null) {
+				try {
+					retVal = task.waitForTask().equals(Task.SUCCESS);
+					if (retVal) {
+						LOGGER.info("VM " + vmName + " switched off");
+					} else {
+						LOGGER.info("VM " + vmName + "cannot powerOff");
+						return;
+
+					}
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+			} else {
+				LOGGER.warn("Cannot stop Virtual Machine " + vmName);
+			}
+
+			if (retVal && getPowerState(vm).equals(POWER_OFF)) {
+				changeSpec.setCpuHotAddEnabled(true);
+				changeSpec.setMemoryHotAddEnabled(true);
+
+				task = vm.reconfigVM_Task(changeSpec);
+
+				if (task != null) {
+					try {
+						retVal = task.waitForTask().equals(Task.SUCCESS);
+						if (retVal) {
+							LOGGER.info("VM " + vmName
+									+ " configuration updated - HotAdd plugin enabled for CPU and Memory");
+						} else {
+							LOGGER.info("VM " + vmName + " cannot be reconfigured");
+						}
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+					}
+				}
+
+				// We powerOn if this is the last state.
+				if (lastPowerState.equals(POWER_ON) && vm.getGuest().getGuestState().equals(POWER_OFF)) {
+					task = vm.powerOnVM_Task(null);
+					if (task != null) {
+						try {
+							retVal = task.waitForTask().equals(Task.SUCCESS);
+							if (retVal) {
+								LOGGER.info("VM " + vmName + " switched on");
+
+							} else {
+								LOGGER.warn("VM " + vmName + " cannot be switched on");
+							}
+							return;
+						} catch (InterruptedException e) {
+							e.printStackTrace();
+						}
+					} else {
+						LOGGER.info("Cannot start Virtual Machine: " + vmName);
+					}
+				}
+
+			} else {
+				LOGGER.info("Something go wrong, cant reconfigure the virtual machine : " + vmName);
+			}
+		}
+		LOGGER.info("HotAdd plugin already enabled");
+	}
+
+	/**
+	 * Change configuration for a VM - Hot.
+	 *
+	 * @param vm
+	 * @param vnumCPU
+	 *            (optional may be null)
+	 * @param vRamSizeGB
+	 *            (optional may be null) in GigaBytes
+	 * @return
+	 * @throws InvalidProperty
+	 * @throws RuntimeFault
+	 * @throws RemoteException
+	 */
+	public static void reconfigureVm(final VirtualMachine vm, final Integer vnumCPU, final Float vRamSizeGB)
+			throws RemoteException {
+
+		VirtualMachineConfigSpec changeSpecHot = new VirtualMachineConfigSpec();
+		VirtualMachineConfigSpec changeSpecCold = new VirtualMachineConfigSpec();
+		String lastPowerState = getPowerState(vm);
+		if (vm == null) {
+			LOGGER.warn("The virtual machine object doesnt exist for hot reconfigurartion");
+			return;
+		}
+		boolean setCPU = true;
+		boolean setRAM = true;
+		String vmName = vm.getName();
+		Integer nbCpuInit = getNumCPU(vm);
+		Long memoryMB = null;
+		if (vnumCPU != null && vnumCPU > 0) {
+			// Check if we change the number of cpu core.
+			if (vnumCPU == getNumCPU(vm)) {
+				setCPU = false;
+			}
+		} else {
+			setCPU = false;
+		}
+		Float ramInit = getMemoryGB(vm);
+		// Be warned, the ram size is explained in GB not in MB. VMWare explain
+		// the ram in MegaBytes.
+		if (vRamSizeGB != null && vRamSizeGB > 0.0) {
+			if (ramInit == vRamSizeGB) {
+				setRAM = false;
+			}
+		} else {
+			setRAM = false;
+		}
+		if (setCPU) {
+			LOGGER.info("VM " + vmName + " change cpu from " + nbCpuInit.intValue() + " to " + vnumCPU.intValue());
+
+		}
+
+		if (setRAM) {
+			LOGGER.info("VM " + vmName + " change memory from " + ramInit + " to " + vRamSizeGB);
+			Float memoryMBfl = vRamSizeGB * 1024;
+			memoryMB = memoryMBfl.longValue();
+		}
+		if (!setCPU && !setRAM) {
+			LOGGER.warn("Hot/cold reconfiguration cannot applied, cpu and ram are not set on vm : " + vmName);
+			return;
+		}
+		Task task = null;
+		boolean retVal = false;
+		boolean hotReconfCPU = false;
+		boolean hotReconfRAM = false;
+		int numCores = getNumCPU(vm) / getNumCorePerSocket(vm);
+
+		// Determine if we use hot reconfiguration (preferred) or cold
+		// reconfiguration.
+		if (vm.getConfig().getCpuHotAddEnabled() && setCPU) {
+			// Hot reconfig for cpu ok.
+			hotReconfCPU = true;
+			if (numCores < 2) {
+				changeSpecHot.setNumCPUs(vnumCPU);
+				changeSpecHot.setNumCoresPerSocket(vnumCPU);
+
+			} else if (numCores >= 2) {
+				changeSpecHot.setNumCPUs(vnumCPU);
+				changeSpecHot.setNumCoresPerSocket(vnumCPU / numCores);
+			}
+
+		} else if (setCPU) {
+			changeSpecCold.setNumCPUs(vnumCPU);
+			if (numCores < 2) {
+				changeSpecCold.setNumCoresPerSocket(vnumCPU);
+			} else if (numCores >= 2) {
+				changeSpecCold.setNumCoresPerSocket(vnumCPU / numCores);
+			}
+			changeSpecCold.setCpuHotAddEnabled(true);
+		}
+
+		if (vm.getConfig().getMemoryHotAddEnabled() && setRAM) {
+			hotReconfRAM = true;
+			changeSpecHot.setMemoryMB(memoryMB);
+		} else if (setRAM) {
+			changeSpecCold.setMemoryMB(memoryMB);
+			changeSpecCold.setMemoryHotAddEnabled(true);
+		}
+
+		// Case of an hot reconfiguration.
+		if (hotReconfCPU || hotReconfRAM) {
+
+			// Launch hot reconfiguration task.
+			task = vm.reconfigVM_Task(changeSpecHot);
+			if (task != null) {
+				try {
+					retVal = task.waitForTask().equals(Task.SUCCESS);
+					if (retVal) {
+						LOGGER.info("VM " + vmName + " configuration updated ");
+					} else {
+						LOGGER.warn("VM " + vmName + " cannot be reconfigured");
+					}
+
+				} catch (InterruptedException ex) {
+					ex.printStackTrace();
+				}
+			}
+
+		}
+
+		// Case of cold reconfiguration.
+		if ((!hotReconfCPU && setCPU) || (!hotReconfRAM && setRAM)) {
+			// Launch a cold reconf...
+			task = null;
+			retVal = false;
+			if (getPowerState(vm).equals(POWER_ON) || getPowerState(vm).equals(SUSPENDED)) {
+				// Power off the virtual machine.
+				task = vm.powerOffVM_Task();
+				if (task != null) {
+					try {
+						retVal = task.waitForTask().equals(Task.SUCCESS);
+						if (retVal) {
+							LOGGER.info("VM " + vmName + " switched off");
+						} else {
+							LOGGER.warn("VM " + vmName + " cannot be switched off");
+							return;
+						}
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+					}
+				}
+			}
+			if (retVal) {
+				task = vm.reconfigVM_Task(changeSpecCold);
+				if (task != null) {
+					try {
+						retVal = task.waitForTask().equals(Task.SUCCESS);
+						if (retVal) {
+							LOGGER.info("VM " + vmName
+									+ " configuration updated and HotAdd plugin enabled for [CPU and/or Memory]");
+						} else {
+							LOGGER.info("VM " + vmName + " cannot be reconfigured");
+						}
+					} catch (InterruptedException e) {
+						e.printStackTrace();
+					}
+				}
+
+			}
+
+			if (lastPowerState.equals(POWER_ON)) {
+				task = vm.powerOnVM_Task(null);
+				if (task != null) {
+					try {
+						retVal = task.waitForTask().equals(Task.SUCCESS);
+						if (retVal) {
+							LOGGER.info("VM " + vmName + " switched On");
+						} else {
+							LOGGER.info("VM " + vmName + " cannot be switched on");
+						}
+					} catch (InterruptedException e) {
+						// TODO Auto-generated catch block
+						e.printStackTrace();
+					}
+				} else {
+					LOGGER.warn("Cannot start Virtual Machine : " + vmName);
+				}
+
+			}
+
+		} // Endif cold reconfiguration case.
+
+	}
+
+	/**
+	 * Check if vmware tools are installed on virtual machine.
+	 * @param vm
+	 * @return true if installed.
+	 */
+	public static boolean isToolsInstalled(final VirtualMachine vm) {
+		boolean result = false;
+		VirtualMachineToolsStatus toolsStatus = vm.getGuest().getToolsStatus();
+		if (!toolsStatus.equals(VirtualMachineToolsStatus.toolsNotInstalled)) {
+			result = true;
+		}
+		return result;
+	}
+	/**
+	 * Check if vmware tools are running on virtual machine.
+	 * @param vm
+	 * @return
+	 */
+	public static boolean isToolsRunning(final VirtualMachine vm) {
+		boolean result = false;
+		VirtualMachineToolsStatus toolsStatus = vm.getGuest().getToolsStatus();
+		if (!toolsStatus.equals(VirtualMachineToolsStatus.toolsNotRunning)) {
+			result = true;
+		}
+		
+		return result;
+		
+	}
+		
 	
+	/**
+	 * Power on a virtual machine.
+	 * 
+	 * @param vm
+	 */
+	public static void powerOn(VirtualMachine vm) {
+		Task task = null;
+		boolean retVal = false;
+		String vmName = vm.getName();
+		try {
+			task = vm.powerOnVM_Task(null);
+
+			if (task != null) {
+				try {
+					retVal = task.waitForTask().equals(Task.SUCCESS);
+					if (retVal) {
+						LOGGER.info("VM " + vmName + " switched On");
+					} else {
+						LOGGER.info("VM " + vmName + " cannot be switched on");
+					}
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+			} else {
+				LOGGER.warn("Cannot start Virtual Machine : " + vmName);
+			}
+		} catch (RemoteException ex) {
+			LOGGER.error("Error while starting a virtual machine : " + vmName);
+			ex.printStackTrace();
+		}
+
+	}
+	
+	/**
+	 * Graceful power off a virtual machine. (shutdown guest os before poweroff).
+	 * @param vm
+	 */
+	public static void graceFulPowerOff(VirtualMachine vm) {
+		String vmName = vm.getName();
+		try {
+		if (isToolsInstalled(vm) && isToolsRunning(vm)) {
+			vm.shutdownGuest();
+	        LOGGER.info("OS of the VM " + vmName + " will be stopped");
+	            
+	        } else {
+	            LOGGER.info("OS of the VM " + vmName + " cannot be stopped, do you have installed the vmware tools ?");
+	        }
+		} catch (RemoteException ex) {
+			LOGGER.error("Error while stopping the virtual machine " + vmName + " message:" + ex.getMessage());
+			ex.printStackTrace();
+		}
+	}
+	
+	/**
+	 * Power off a virtual machine.
+	 * @param vm
+	 */
+	public static void powerOff(VirtualMachine vm) {
+		Task task = null;
+		boolean retVal = false;
+		String vmName = vm.getName();
+		try {
+			task = vm.powerOffVM_Task();
+
+			if (task != null) {
+				try {
+					retVal = task.waitForTask().equals(Task.SUCCESS);
+					if (retVal) {
+						LOGGER.info("VM " + vmName + " switched Off");
+					} else {
+						LOGGER.info("VM " + vmName + " cannot be switched off");
+					}
+				} catch (InterruptedException e) {
+					e.printStackTrace();
+				}
+			} else {
+				LOGGER.warn("Cannot stop Virtual Machine : " + vmName);
+			}
+		} catch (RemoteException ex) {
+			LOGGER.error("Error while stopping a virtual machine : " + vmName);
+			ex.printStackTrace();
+		}
+	}
+	
+	
+
 }

@@ -134,7 +134,9 @@ public class VCenterClient {
 	public static boolean isConnected() {
 		boolean result = false;
 		if (serviceInstance != null && serviceInstance.getAboutInfo().getApiVersion() != null) {
-			result = true;
+			if (serviceInstance.getSessionManager().getCurrentSession() != null) {
+				result = true;
+			}
 		}
 		return result;
 	}
@@ -145,6 +147,8 @@ public class VCenterClient {
 	 */
 	public static boolean checkConnection() {
 		if (!isConnected()) {
+			System.out.println("Not connected, connection in progress...");
+			
 			try {
 				init();
 				connect();
@@ -154,6 +158,7 @@ public class VCenterClient {
 				return false;
 			}
 		} else {
+			System.out.println("Connected to vcenter.");
 			return true;
 		}
 

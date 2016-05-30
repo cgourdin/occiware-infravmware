@@ -23,10 +23,9 @@ import org.occiware.clouddesigner.occi.AttributeState;
 import org.occiware.clouddesigner.occi.Link;
 import org.occiware.clouddesigner.occi.infrastructure.Architecture;
 import org.occiware.clouddesigner.occi.infrastructure.ComputeStatus;
+import org.occiware.clouddesigner.occi.infrastructure.StopMethod;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.allocator.AllocatorImpl;
-import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.CloneVM;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.ClusterHelper;
-import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.CreateVM;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.DatacenterHelper;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.DatastoreHelper;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.HostHelper;
@@ -51,6 +50,7 @@ import com.vmware.vim25.mo.ManagedEntity;
 import com.vmware.vim25.mo.Network;
 import com.vmware.vim25.mo.ResourcePool;
 import com.vmware.vim25.mo.ServiceInstance;
+import com.vmware.vim25.mo.Task;
 import com.vmware.vim25.mo.VirtualMachine;
 
 /**
@@ -316,7 +316,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 			this.setDatastoreName(datastore.getName());
 
 			Folder vmFolder;
-			
+
 			if (vmTemplate != null) {
 				// We clone the vm.
 				try {
@@ -331,21 +331,39 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 					cloneSpec.setLocation(vmRelocate);
 					cloneSpec.setTemplate(false);
 					cloneSpec.setPowerOn(false);
-					// TODO : guest hostname (lvl OS), when set, create a customizationSpec.setDomain(hostname) for the corresponding operating system. It is not implemented for now.
-					
+
+					// TODO : guest hostname (lvl OS), when set, create a
+					// customizationSpec.setDomain(hostname) for the
+					// corresponding operating system. It is not implemented for
+					// now.
+
 					if (vmTemplate.getCurrentSnapShot() != null) {
 						cloneSpec.snapshot = vmTemplate.getCurrentSnapShot().getMOR();
 					}
-					
+
 					LOGGER.info("Creating the Virtual Machine >> " + this.getTitle() + " << from template: "
 							+ vmTemplate.getName());
-					
-					// final Task task = vmTemplate.cloneVM_Task(vmFolder, vmName, cloneSpec);
-					CloneVM cloneVM = new CloneVM(vmFolder, vmTemplate, vmName, cloneSpec);
-					Runnable run = cloneVM.createTask();
-					new Thread(run).start();
-					
-				} catch (RemoteException ex) {
+
+					com.vmware.vim25.mo.Task taskVm = vmTemplate.cloneVM_Task(vmFolder, vmName, cloneSpec);
+					// TODO : Monitoring Task in other thread.
+					String result = taskVm.waitForTask();
+					if (result == com.vmware.vim25.mo.Task.SUCCESS) {
+						LOGGER.info("Virtual Machine successfully created from template : " + vmTemplate.getName());
+						// Find the values of this vm and update this
+						// compute resource model.
+						// occiRetrieve();
+					} else {
+						LOGGER.info("VM couldn't be created ! vm name: " + vmName + " from template: "
+								+ vmTemplate.getName());
+					}
+					// final Task task = vmTemplate.cloneVM_Task(vmFolder,
+					// vmName, cloneSpec);
+					// CloneVM cloneVM = new CloneVM(vmFolder, vmTemplate,
+					// vmName, cloneSpec);
+					// Runnable run = cloneVM.createTask();
+					// new Thread(run).start();
+
+				} catch (RemoteException | InterruptedException ex) {
 					LOGGER.error("VM was not created or has errors, please check your vcenter and your configuration");
 					LOGGER.error("Message: " + ex.getMessage());
 					if (ex.getMessage() == null) {
@@ -419,6 +437,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 							break;
 						}
 					}
+
 					// if (netConnector == null) {
 					// LOGGER.error("You must setup a virtual network");
 					// VCenterClient.disconnect();
@@ -440,9 +459,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 					}
 
 					// TODO : Check VMWare tools, if no vmware tools, the sdk
-					// will
-					// not
-					// give the ipv4, nor ipv6 .
+					// will not give the ipv4, nor ipv6 .
 					// + upgrade automaticly VMWare Tools via VIJava.
 
 					// Network configuration.
@@ -478,7 +495,8 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 					vmSpec.setNumCPUs(this.getCores());
 					vmSpec.setGuestId(guestOsId);
 					vmSpec.setCpuHotAddEnabled(true);
-					vmSpec.setCpuHotRemoveEnabled(true);
+					// vmSpec.setCpuHotRemoveEnabled(true);
+					vmSpec.setMemoryHotAddEnabled(true);
 
 					vmSpec.setDeviceChange(new VirtualDeviceConfigSpec[] { scsiSpec, diskSpec, nicSpec });
 					// Create vm file info for vmx file.
@@ -492,23 +510,30 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 					vmFolder = datacenter.getVmFolder();
 
 					// Create effectively the vm on folder.
-					CreateVM createVM = new CreateVM(vmSpec, rp, host, vmFolder);
-					
-					Runnable run = createVM.createTask();
-					new Thread(run).start();
-					
+					com.vmware.vim25.mo.Task taskVm = vmFolder.createVM_Task(vmSpec, rp, host);
+					// TODO : Monitoring task object in other thread. See :
+					// http://benohead.com/vi-java-api-monitoring-task-completion/
+					String result = taskVm.waitForTask();
+					if (result == com.vmware.vim25.mo.Task.SUCCESS) {
+						LOGGER.info("Virtual Machine successfully created !");
+						// Find the values of this vm and update this
+						// compute resource model.
+						// occiRetrieve();
+					} else {
+						LOGGER.info("VM couldn't be created !");
+					}
+
 					// Create vm terminated
 
-				} catch (RemoteException ex) {
+				} catch (RemoteException | InterruptedException ex) {
 					LOGGER.error("Cannot create the virtual machine : " + ex.getMessage());
+					ex.printStackTrace();
 					VCenterClient.disconnect();
 					return;
 				}
 
 			} // endif vmTemplate exist.
-			
-			 
-			
+
 			// if (vmFolder != null) {
 			// vm = VMHelper.findVMForName(vmFolder, vmName);
 			// if (vm != null) {
@@ -556,33 +581,37 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 			VCenterClient.disconnect();
 			return;
 		}
-		
-		
+
 		Datacenter dc = null;
 		ClusterComputeResource cluster = null;
 		Datastore ds = null;
-		
-		// Search for the cluster and datacenter info. (if any, it is not mandatory to have a cluster, so it is a simple information.
+
+		// Search for the cluster and datacenter info. (if any, it is not
+		// mandatory to have a cluster, so it is a simple information.
 		ManagedEntity mEntity = host.getParent();
 		while (mEntity != null) {
-			
+
 			if (mEntity instanceof Datacenter) {
-				dc = (Datacenter)mEntity;
-				// LOGGER.info("Datacenter : " + mEntity.getName() + " <<  " + dc.getName());
+				dc = (Datacenter) mEntity;
+				// LOGGER.info("Datacenter : " + mEntity.getName() + " << " +
+				// dc.getName());
 			}
-//			if (mEntity instanceof Folder) {
-//				folder = (Folder)mEntity;
-//				// LOGGER.info("Folder: " + mEntity.getName() + " <<  " + folder.getName());
-//			}
+			// if (mEntity instanceof Folder) {
+			// folder = (Folder)mEntity;
+			// // LOGGER.info("Folder: " + mEntity.getName() + " << " +
+			// folder.getName());
+			// }
 			if (mEntity instanceof ClusterComputeResource) {
-			    cluster = (ClusterComputeResource) mEntity;
-				// LOGGER.info("Cluster: " + mEntity.getName() + " <<  " + cluster.getName());
+				cluster = (ClusterComputeResource) mEntity;
+				// LOGGER.info("Cluster: " + mEntity.getName() + " << " +
+				// cluster.getName());
 			}
 			if (mEntity instanceof Datastore) {
 				ds = (Datastore) mEntity;
-				// LOGGER.info("Cluster: " + mEntity.getName() + " <<  " + datastore.getName());
+				// LOGGER.info("Cluster: " + mEntity.getName() + " << " +
+				// datastore.getName());
 			}
-			
+
 			// folder = (Folder)folder.getParent();
 			mEntity = mEntity.getParent();
 		}
@@ -606,17 +635,18 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 				if (ds != null) {
 					this.setDatastoreName(ds.getName());
 				}
-				
+
 			} catch (RemoteException ex) {
-				LOGGER.error("Error while searching all datastores for this virtual machine: " + vm.getName());				
+				LOGGER.error("Error while searching all datastores for this virtual machine: " + vm.getName());
 				LOGGER.error("Message: " + ex.getMessage());
+				VCenterClient.disconnect();
+				return;
 			}
-			
-			
+
 		} else {
 			this.setDatastoreName(ds.getName());
 		}
-		
+
 		// Load the compute information from vCenter.
 		Integer numCpu = VMHelper.getNumCPU(vm);
 		Float memoryGB = VMHelper.getMemoryGB(vm);
@@ -634,7 +664,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		this.setMemory(memoryGB);
 		this.setSpeed(speed);
 		this.setState(defineStatus(vmState));
-		
+
 		// In the end we disconnect.
 		VCenterClient.disconnect();
 	}
@@ -649,7 +679,27 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 			// Must return true if connection is established.
 			return;
 		}
-		// TODO: Implement this callback or remove this method.
+
+		// Load the vm information.
+		String vmName = this.getTitle();
+		ServiceInstance si = VCenterClient.getServiceInstance();
+		Folder rootFolder = si.getRootFolder();
+		// Search for the vm object.
+		VirtualMachine vm = VMHelper.findVMForName(rootFolder, vmName);
+		if (vm == null) {
+			// no vm exist with this name.
+			LOGGER.warn("This virtual machine doesnt exist anymore.");
+			VCenterClient.disconnect();
+			return;
+		}
+		// Update config.
+		try {
+			VMHelper.reconfigureVm(vm, this.getCores(), this.getMemory());
+		} catch (RemoteException ex) {
+			LOGGER.error("Error while updating the virtual machine configuration : " + vmName + " message: "
+					+ ex.getMessage());
+			ex.printStackTrace();
+		}
 
 		// In the end we disconnect.
 		VCenterClient.disconnect();
@@ -661,11 +711,48 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 	@Override
 	public void occiDelete() {
 		LOGGER.debug("occiDelete() called on " + this);
+
 		if (!VCenterClient.checkConnection()) {
 			// Must return true if connection is established.
 			return;
 		}
-		// TODO: Implement this callback or remove this method.
+		ServiceInstance si = VCenterClient.getServiceInstance();
+		Folder rootFolder = si.getRootFolder();
+		String vmName = this.getTitle();
+		if (vmName == null) {
+			LOGGER.error("The title must be set, as it is used as the VM name (unique).");
+			return;
+		}
+		Task taskDelete = null;
+		VirtualMachine vm = VMHelper.findVMForName(rootFolder, vmName);
+		boolean result;
+		// Delete the vm if this virtual machine exist on vcenter.
+		if (vm != null) {
+			// Launch delete task.
+			LOGGER.info("Destroying vm : " + vmName);
+			try {
+				taskDelete = vm.destroy_Task();
+				if (taskDelete != null) {
+					try {
+						result = taskDelete.waitForTask().equals(Task.SUCCESS);
+						if (result) {
+							LOGGER.info("The virtual machine :  " + vmName + " has been destroyed.");
+						} else {
+							LOGGER.warn("The virtual machine : " + vmName + " cannot be destroyed.");
+						}
+					} catch (InterruptedException ex) {
+						ex.printStackTrace();
+					}
+				} else {
+					LOGGER.warn("The virtual machine has not been destroyed, cant launch the destroy task !");
+				}
+			} catch (RemoteException ex) {
+				LOGGER.error("Error while trying to destroy a virtual machine.");
+				ex.printStackTrace();
+			}
+		} else {
+			LOGGER.warn("The virtual machine " + vmName + " doesn't exist anymore.");
+		}
 
 		// In the end we disconnect.
 		VCenterClient.disconnect();
@@ -687,40 +774,32 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 			// Must return true if connection is established.
 			return;
 		}
-		// Compute State Machine.
-		switch (getState().getValue()) {
 
-		case ComputeStatus.ACTIVE_VALUE:
-			LOGGER.debug("Fire transition(state=active, action=\"start\")...");
-
-			// TODO Implement transition(state=active, action="start")
-
-			break;
-
-		case ComputeStatus.INACTIVE_VALUE:
-			LOGGER.debug("Fire transition(state=inactive, action=\"start\")...");
-
-			// TODO Implement transition(state=inactive, action="start")
-
-			break;
-
-		case ComputeStatus.SUSPENDED_VALUE:
-			LOGGER.debug("Fire transition(state=suspended, action=\"start\")...");
-
-			// TODO Implement transition(state=suspended, action="start")
-
-			break;
-
-		case ComputeStatus.ERROR_VALUE:
-			LOGGER.debug("Fire transition(state=error, action=\"start\")...");
-
-			// TODO Implement transition(state=error, action="start")
-
-			break;
-
-		default:
-			break;
+		// Load vm information to check if the vm is already started.
+		ServiceInstance si = VCenterClient.getServiceInstance();
+		Folder rootFolder = si.getRootFolder();
+		String vmName = this.getTitle();
+		if (vmName == null) {
+			LOGGER.error("The title must be set, as it is used as the VM name (unique).");
+			return;
 		}
+		VirtualMachine vm = VMHelper.findVMForName(rootFolder, vmName);
+		if (vm == null) {
+			LOGGER.warn("The virtual machine " + vmName + " doesn't exist anymore.");
+			return;
+		}
+
+		String vmPowerState = VMHelper.getPowerState(vm);
+
+		if (vmPowerState.equals(VMHelper.POWER_ON)) {
+			LOGGER.info("The virtual machine " + vmName + " is already started.");
+		} else {
+			// in the other case we start the compute.
+			VMHelper.powerOn(vm);
+		}
+		
+		// TODO : Reload vm with last values.
+		this.setState(defineStatus(vmPowerState));
 
 		// In the end we disconnect.
 		VCenterClient.disconnect();
@@ -738,40 +817,44 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 			// Must return true if connection is established.
 			return;
 		}
-		// Compute State Machine.
-		switch (getState().getValue()) {
 
-		case ComputeStatus.ACTIVE_VALUE:
-			LOGGER.debug("Fire transition(state=active, action=\"stop\")...");
-
-			// TODO Implement transition(state=active, action="stop")
-
-			break;
-
-		case ComputeStatus.INACTIVE_VALUE:
-			LOGGER.debug("Fire transition(state=inactive, action=\"stop\")...");
-
-			// TODO Implement transition(state=inactive, action="stop")
-
-			break;
-
-		case ComputeStatus.SUSPENDED_VALUE:
-			LOGGER.debug("Fire transition(state=suspended, action=\"stop\")...");
-
-			// TODO Implement transition(state=suspended, action="stop")
-
-			break;
-
-		case ComputeStatus.ERROR_VALUE:
-			LOGGER.debug("Fire transition(state=error, action=\"stop\")...");
-
-			// TODO Implement transition(state=error, action="stop")
-
-			break;
-
-		default:
-			break;
+		// Load vm information to check if the vm is already started.
+		ServiceInstance si = VCenterClient.getServiceInstance();
+		Folder rootFolder = si.getRootFolder();
+		String vmName = this.getTitle();
+		if (vmName == null) {
+			LOGGER.error("The title must be set, as it is used as the VM name (unique).");
+			return;
 		}
+		VirtualMachine vm = VMHelper.findVMForName(rootFolder, vmName);
+		if (vm == null) {
+			LOGGER.warn("The virtual machine " + vmName + " doesn't exist anymore.");
+			return;
+		}
+
+		String vmPowerState = VMHelper.getPowerState(vm);
+
+		if (vmPowerState.equals(VMHelper.POWER_OFF)) {
+			LOGGER.info("The virtual machine " + vmName + " is already stopped.");
+		} else {
+			// in the other case we start the compute.
+			// if (graceful) shutdown guest os and poweroff.
+			// if acpioff ??
+			// if poweroff direct poweroff.
+			switch (method) {
+			case GRACEFUL:
+				VMHelper.graceFulPowerOff(vm);
+				break;
+			case POWEROFF:
+				VMHelper.powerOff(vm);
+				break;
+			case ACPIOFF:
+				VMHelper.powerOff(vm);
+				break;
+			}
+		}
+		// TODO : Reload vm object with last values.
+		this.setState(defineStatus(vmPowerState));
 
 		// In the end we disconnect.
 		VCenterClient.disconnect();
@@ -789,6 +872,10 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 			// Must return true if connection is established.
 			return;
 		}
+		
+		
+		
+		
 		// Compute State Machine.
 		switch (getState().getValue()) {
 
@@ -1018,25 +1105,25 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 	// return osTpl;
 	// }
 
-//	/**
-//	 * if vcenter client connection is not set, this method will connect to
-//	 * vcenter.
-//	 */
-//	private boolean checkConnection() {
-//		if (!VCenterClient.isConnected()) {
-//			try {
-//				VCenterClient.init();
-//				VCenterClient.connect();
-//				return true;
-//			} catch (IOException ex) {
-//				LOGGER.error(ex.getMessage());
-//				return false;
-//			}
-//		} else {
-//			return true;
-//		}
-//
-//	}
+	// /**
+	// * if vcenter client connection is not set, this method will connect to
+	// * vcenter.
+	// */
+	// private boolean checkConnection() {
+	// if (!VCenterClient.isConnected()) {
+	// try {
+	// VCenterClient.init();
+	// VCenterClient.connect();
+	// return true;
+	// } catch (IOException ex) {
+	// LOGGER.error(ex.getMessage());
+	// return false;
+	// }
+	// } else {
+	// return true;
+	// }
+	//
+	// }
 
 	/**
 	 * Get Main storage link (link on main disk).
@@ -1107,30 +1194,31 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		return netInts;
 
 	}
-	
+
 	/**
-	 * Define the corresponding status from VMWare power state. 
+	 * Define the corresponding status from VMWare power state.
+	 * 
 	 * @param vmwarePowerState
 	 * @return
 	 */
 	private ComputeStatus defineStatus(final String vmwarePowerState) {
 		ComputeStatus status = this.getState();
 		switch (vmwarePowerState) {
-			case VMHelper.POWER_ON:
-				status = ComputeStatus.ACTIVE;
-				break;
-			case VMHelper.POWER_OFF:
-				status = ComputeStatus.INACTIVE;
-				break;
-			case VMHelper.SUSPENDED:
-				status = ComputeStatus.SUSPENDED;
-				break;
-			default:
-				status = ComputeStatus.ERROR;
+		case VMHelper.POWER_ON:
+			status = ComputeStatus.ACTIVE;
+			break;
+		case VMHelper.POWER_OFF:
+			status = ComputeStatus.INACTIVE;
+			break;
+		case VMHelper.SUSPENDED:
+			status = ComputeStatus.SUSPENDED;
+			break;
+		default:
+			status = ComputeStatus.ERROR;
 		}
-		
+
 		return status;
-		
+
 	}
 
 }
