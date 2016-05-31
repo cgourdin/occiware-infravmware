@@ -491,7 +491,7 @@ public class VMHelper {
 	 */
 	public static String getGuestHostname(final VirtualMachine vm) {
 		String hostname = null;
-		if (vm != null) {
+		if (vm != null && isToolsInstalled(vm) && isToolsRunning(vm) ) {
 			hostname = vm.getGuest().getHostName();
 		}
 		return hostname;
@@ -607,7 +607,7 @@ public class VMHelper {
 	}
 
 	/**
-	 * Change configuration for a VM - Hot.
+	 * Change configuration for a VM - Hot or cold.
 	 *
 	 * @param vm
 	 * @param vnumCPU
@@ -626,7 +626,7 @@ public class VMHelper {
 		VirtualMachineConfigSpec changeSpecCold = new VirtualMachineConfigSpec();
 		String lastPowerState = getPowerState(vm);
 		if (vm == null) {
-			LOGGER.warn("The virtual machine object doesnt exist for hot reconfigurartion");
+			LOGGER.warn("The virtual machine object doesnt exist for hot reconfiguration");
 			return;
 		}
 		boolean setCPU = true;
@@ -646,7 +646,7 @@ public class VMHelper {
 		// Be warned, the ram size is explained in GB not in MB. VMWare explain
 		// the ram in MegaBytes.
 		if (vRamSizeGB != null && vRamSizeGB > 0.0) {
-			if (ramInit == vRamSizeGB) {
+			if (ramInit.floatValue() == vRamSizeGB.floatValue()) {
 				setRAM = false;
 			}
 		} else {
@@ -746,6 +746,8 @@ public class VMHelper {
 						e.printStackTrace();
 					}
 				}
+			} else {
+				retVal = true;
 			}
 			if (retVal) {
 				task = vm.reconfigVM_Task(changeSpecCold);
@@ -869,6 +871,7 @@ public class VMHelper {
 
 			} else {
 				LOGGER.info("OS of the VM " + vmName + " cannot be stopped, do you have installed the vmware tools ?");
+				powerOff(vm);
 			}
 		} catch (RemoteException ex) {
 			LOGGER.error("Error while stopping the virtual machine " + vmName + " message:" + ex.getMessage());

@@ -106,19 +106,27 @@ public class HostHelper {
 		return host;
 	}
 
+	
 	/**
 	 * Find the first Host network.
 	 */
 	public static Network findFirstHostNetwork(HostSystem host) {
 		Network network = null;
+		Network[] networks = null;
 		if (host != null) {
 			try {
-				network = host.getNetworks()[0];
+				networks = host.getNetworks();
+				if (networks != null && networks.length > 0) {
+					network = networks[0];
+					LOGGER.info("Network found : " + network.getName());
+				}
 			} catch (RemoteException ex) {
 				LOGGER.error("Error while allocating a network from host: " + host.getName());
 			}
 		}
 		return network;
 	}
+	
+	
 
 }

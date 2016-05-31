@@ -17,7 +17,14 @@ package org.occiware.clouddesigner.occi.infrastructure.connector.vmware;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.vmware.vim25.mo.Folder;
+import com.vmware.vim25.mo.ServiceInstance;
+
+import org.eclipse.emf.common.util.EList;
+import org.occiware.clouddesigner.occi.Link;
 import org.occiware.clouddesigner.occi.infrastructure.StorageStatus;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.allocator.AllocatorImpl;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VCenterClient;
 
 /**
  * Connector implementation for the OCCI kind:
@@ -51,8 +58,26 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	public void occiCreate()
 	{
 		LOGGER.debug("occiCreate() called on " + this);
-
-		// TODO: Implement this callback or remove this method.
+		if (!VCenterClient.checkConnection()) {
+			// Must return true if connection is established.
+			return;
+		}
+		ServiceInstance si = VCenterClient.getServiceInstance();
+		Folder rootFolder = si.getRootFolder();
+		
+		AllocatorImpl allocator = new AllocatorImpl(rootFolder);
+		
+		// Determine if this is a main storage, if this is the case, delegate to occiCreate on compute, not here.
+		StoragelinkConnector stLink;
+		EList<Link> links = this.getLinks();
+		if (links.isEmpty()) {
+			LOGGER.warn("No storage link found, you must attach the storage to a compute.");
+			return;
+		}
+		
+		
+		// In all case invoke a disconnect from vcenter.
+		VCenterClient.disconnect();
 	}
 
 	/**

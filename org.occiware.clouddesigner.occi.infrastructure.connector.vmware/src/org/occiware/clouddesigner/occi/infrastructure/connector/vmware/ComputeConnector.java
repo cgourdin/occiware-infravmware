@@ -20,7 +20,10 @@ import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
 import org.occiware.clouddesigner.occi.AttributeState;
+import org.occiware.clouddesigner.occi.Configuration;
 import org.occiware.clouddesigner.occi.Link;
+import org.occiware.clouddesigner.occi.OCCIRegistry;
+import org.occiware.clouddesigner.occi.Resource;
 import org.occiware.clouddesigner.occi.infrastructure.Architecture;
 import org.occiware.clouddesigner.occi.infrastructure.ComputeStatus;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.allocator.AllocatorImpl;
@@ -30,6 +33,7 @@ import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.Dat
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.HostHelper;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VCenterClient;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VMHelper;
+import org.occiware.clouddesigner.occi.util.OcciHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -547,7 +551,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 			// }
 
 		} // Endif toCreate.
-
+		occiRetrieve();
 		// In all case invoke a disconnect from vcenter.
 		VCenterClient.disconnect();
 	}
@@ -675,6 +679,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		Float speed = VMHelper.getCPUSpeed(vm);
 		// Define the states of this vm.
 		String vmState = VMHelper.getPowerState(vm);
+		String hostname = VMHelper.getGuestHostname(vm);
 		// String vmGuestState = VMHelper.getGuestState(vm);
 		if (architecture.equals("x64")) {
 			this.setArchitecture(Architecture.X64);
@@ -685,7 +690,11 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		this.setMemory(memoryGB);
 		this.setSpeed(speed);
 		this.setState(defineStatus(vmState));
-
+		if (hostname != null) {
+			this.setHostname(hostname);
+		}
+		
+		
 		// In the end we disconnect.
 		VCenterClient.disconnect();
 	}
@@ -723,7 +732,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 					LOGGER.info("The virtual machine name has been changed to a new one, updating...");
 					VMHelper.renameVM(vm, vmName);
 					vm = VMHelper.loadVirtualMachine(vmName);
-
+					vmOldName = vmName;
 				} else {
 					VCenterClient.disconnect();
 					return;
@@ -740,7 +749,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 					+ ex.getMessage());
 			ex.printStackTrace();
 		}
-
+		occiRetrieve();
 		// In the end we disconnect.
 		VCenterClient.disconnect();
 	}
@@ -779,6 +788,10 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		}
 		VMHelper.destroyVM(vm);
 
+		// Reset status to poweroff by default inactive.
+		this.setState(ComputeStatus.INACTIVE);
+		
+		
 		// In the end we disconnect.
 		VCenterClient.disconnect();
 	}
@@ -819,10 +832,8 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 			// in the other case we start the compute.
 			VMHelper.powerOn(vm);
 		}
-
-		// TODO : Reload vm with last values.
-		this.setState(defineStatus(vmPowerState));
-
+		
+		occiRetrieve();
 		// In the end we disconnect.
 		VCenterClient.disconnect();
 	}
@@ -871,8 +882,8 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 				break;
 			}
 		}
-		// TODO : Reload vm object with last values.
-		this.setState(defineStatus(vmPowerState));
+		
+		occiRetrieve();
 
 		// In the end we disconnect.
 		VCenterClient.disconnect();
@@ -917,29 +928,37 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 			case GRACEFUL:
 				if (vmPowerState.equals(VMHelper.SUSPENDED)) {
 					VMHelper.powerOn(vm);
+					this.setState(ComputeStatus.ACTIVE);
 				}
 				VMHelper.graceFulPowerOff(vm);
+				this.setState(ComputeStatus.INACTIVE);
 				VMHelper.powerOn(vm);
+				// TODO : TaskInfo controller to check the updated status.
+				this.setState(ComputeStatus.ACTIVE);
+				
 				break;
 			case COLD:
 				if (vmPowerState.equals(VMHelper.SUSPENDED)) {
 					VMHelper.powerOn(vm);
+					this.setState(ComputeStatus.ACTIVE);
 				}
 				VMHelper.powerOff(vm);
+				this.setState(ComputeStatus.INACTIVE);
 				VMHelper.powerOn(vm);
-
+				this.setState(ComputeStatus.ACTIVE);
+				
 				break;
 			case WARM:
 				if (vmPowerState.equals(VMHelper.SUSPENDED)) {
 					VMHelper.powerOn(vm);
+					this.setState(ComputeStatus.ACTIVE);
 				}
 				VMHelper.rebootGuest(vm);
 				break;
 			}
 		}
-		// TODO : Reload vm object with last values.
-		this.setState(defineStatus(vmPowerState));
-
+		occiRetrieve();
+		
 		// In the end we disconnect.
 		VCenterClient.disconnect();
 	}
@@ -987,9 +1006,8 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 				break;
 			}
 		}
-		// TODO : Reload vm object with last values.
-		this.setState(defineStatus(vmPowerState));
-
+		
+		occiRetrieve();
 		// In the end we disconnect.
 		VCenterClient.disconnect();
 	}
@@ -1022,9 +1040,8 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		VMHelper.markAsTemplate(vm);
 
 		vm = VMHelper.loadVirtualMachine(vmName);
-		String vmPowerState = VMHelper.getPowerState(vm);
-		this.setState(defineStatus(vmPowerState));
-
+		
+		occiRetrieve();
 		// In the end we disconnect.
 		VCenterClient.disconnect();
 	}
@@ -1144,6 +1161,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 */
 	private StoragelinkConnector getMainStorageLink() {
 		EList<Link> links = this.getLinks();
+		
 		List<StoragelinkConnector> storageLinks = new ArrayList<>();
 		StoragelinkConnector mainStorageLink = null;
 		for (Link link : links) {
@@ -1152,7 +1170,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 			}
 		}
 		int storageLinkSize = storageLinks.size();
-
+		
 		// Detect where's the main disk.
 		for (StoragelinkConnector stLink : storageLinks) {
 			if (storageLinkSize == 1 || (stLink.getMountpoint() != null && (stLink.getMountpoint().equals("/")
@@ -1161,7 +1179,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 				break;
 			}
 		}
-
+		
 		return mainStorageLink;
 	}
 
@@ -1231,5 +1249,5 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		return status;
 
 	}
-
+	
 }
