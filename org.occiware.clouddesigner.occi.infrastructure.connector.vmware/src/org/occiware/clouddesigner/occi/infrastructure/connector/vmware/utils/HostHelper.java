@@ -1,3 +1,15 @@
+/**
+ * Copyright (c) 2016 Inria
+ *  
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
+ * 
+ * Contributors:
+ * - Christophe Gourdin <christophe.gourdin@inria.fr>
+ *
+ */
 package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils;
 
 import java.rmi.RemoteException;
@@ -9,7 +21,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.vmware.vim25.mo.ClusterComputeResource;
-import com.vmware.vim25.mo.Datacenter;
 import com.vmware.vim25.mo.Folder;
 import com.vmware.vim25.mo.HostSystem;
 import com.vmware.vim25.mo.InventoryNavigator;
@@ -94,7 +105,7 @@ public class HostHelper {
 
 		return host;
 	}
-	
+
 	/**
 	 * Find the first Host network.
 	 */

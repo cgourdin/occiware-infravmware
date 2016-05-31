@@ -8,7 +8,8 @@
  * 
  * Contributors:
  * - Philippe Merle <philippe.merle@inria.fr>
- *
+ * - Christophe Gourdin <christophe.gourdin@inria.fr>
+ * 
  * Generated at Tue May 10 13:08:38 CEST 2016 from platform:/plugin/org.occiware.clouddesigner.occi.infrastructure/model/Infrastructure.occie by org.occiware.clouddesigner.occi.gen.connector
  */
 package org.occiware.clouddesigner.occi.infrastructure.connector.vmware;

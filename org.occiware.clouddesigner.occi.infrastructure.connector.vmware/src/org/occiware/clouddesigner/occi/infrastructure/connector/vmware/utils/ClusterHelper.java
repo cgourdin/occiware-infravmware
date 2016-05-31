@@ -1,4 +1,18 @@
+/**
+ * Copyright (c) 2016 Inria
+ *  
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
+ * 
+ * Contributors:
+ * - Christophe Gourdin <christophe.gourdin@inria.fr>
+ *
+ */
 package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils;
+
+
 
 import java.rmi.RemoteException;
 
@@ -13,9 +27,10 @@ import com.vmware.vim25.mo.ManagedEntity;
 
 public class ClusterHelper {
 	private static Logger LOGGER = LoggerFactory.getLogger(ClusterHelper.class);
-	
+
 	/**
 	 * Find a cluster for a name.
+	 * 
 	 * @param folder
 	 * @param name
 	 * @return a cluster if found, null if none.
@@ -75,5 +90,5 @@ public class ClusterHelper {
 		}
 		return cluster;
 	}
-	
+
 }
