@@ -71,7 +71,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 */
 	protected VirtualMachineConfigSpec vmSpec = null;
 
-	public static final String VIRTUAL_MACHINE = "VirtualMachine";
+	
 
 	private String datacenterName = null;
 	private String datastoreName = null;
@@ -158,7 +158,10 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 				VCenterClient.disconnect();
 				return;
 			}
+		} else {
+			allocator.setDc(datacenter);
 		}
+		
 		this.setDatacenterName(datacenter.getName());
 
 		// Defines if vm is already setup in vcenter, if this is the case we

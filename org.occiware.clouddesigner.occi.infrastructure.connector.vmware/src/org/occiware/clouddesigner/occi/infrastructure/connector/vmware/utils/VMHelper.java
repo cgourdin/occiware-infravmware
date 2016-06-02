@@ -68,6 +68,8 @@ public class VMHelper {
 	 */
 	public static final String SUSPENDED = "suspended";
 
+	public static final String VIRTUAL_MACHINE = "VirtualMachine";
+	
 	/**
 	 * Search for a VirtualMachine on tree folder for a name.
 	 * 
@@ -79,7 +81,7 @@ public class VMHelper {
 		VirtualMachine vm = null;
 
 		try {
-			vm = (VirtualMachine) new InventoryNavigator(folder).searchManagedEntity(ComputeConnector.VIRTUAL_MACHINE,
+			vm = (VirtualMachine) new InventoryNavigator(folder).searchManagedEntity(VIRTUAL_MACHINE,
 					name);
 
 		} catch (RemoteException ex) {
