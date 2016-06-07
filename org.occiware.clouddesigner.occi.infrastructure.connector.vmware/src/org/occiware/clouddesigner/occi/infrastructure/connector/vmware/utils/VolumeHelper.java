@@ -3,6 +3,7 @@ package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils;
 import java.io.IOException;
 import java.rmi.RemoteException;
 
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.Volume;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,87 +28,38 @@ public class VolumeHelper {
 	
 	private static Logger LOGGER = LoggerFactory.getLogger(VolumeHelper.class);
 	
-	public static String VIRTUAL_DISK = "VirtualDisk";
+	private static Volume volume = null;
 	
 	/**
-	 * Find a volume for his name on the datastore.
+	 * Load or refresh volume information from vcenter.
 	 * @param ds
-	 * @param volumeName (ex: data1)
-	 * @return the full path like "[datastore1] /datavm1/data1.vmdk", may return null if no volume is found.
+	 * @param volumeName
+	 * @param dc
+	 * @param vmName (may be null if volume is not attached.)
 	 */
-	public static String findVolumeVMDKPathForName(final Datastore ds, final String volumeName) {
-		String fullPath = null;
-		String dsName = ds.getName();
-		String basePath = null;
+	public static void loadVolumeInformation(Datastore ds, String volumeName, Datacenter dc, String vmName) {
+		// Load a volume.
+		volume = new Volume(volumeName, ds, dc, vmName);
+		volume.loadVolume();
 		
-		VmDiskFileQueryFilter vdiskFilter = new VmDiskFileQueryFilter();
-        vdiskFilter.setControllerType(new String[]{ "VirtualSCSIController"}); // "VirtualIDEController", "VirtualSATAController"
-        
-        VmDiskFileQuery fQuery = new VmDiskFileQuery();
-        fQuery.setFilter(vdiskFilter);
-        
-        HostDatastoreBrowserSearchSpec searchSpec = new HostDatastoreBrowserSearchSpec();
-        searchSpec.setQuery(new FileQuery[]{fQuery});
-        searchSpec.setMatchPattern(new String[] {volumeName + ".vmdk"}); // ".*"
-        
-        FileQueryFlags fqf = new FileQueryFlags();
-        fqf.setFileSize(true);
-        fqf.setModification(true);
-        fqf.setFileOwner(true);
-        fqf.setFileType(true);
-        
-        searchSpec.setDetails(fqf);
-        try {
-        	Task subFolderTask = ds.getBrowser().searchDatastoreSubFolders_Task("[" + ds.getName() + "]", searchSpec);
-        	subFolderTask.waitForTask();
-            TaskInfo tInfo = subFolderTask.getTaskInfo();
-            ArrayOfHostDatastoreBrowserSearchResults searchResult
-                    = (ArrayOfHostDatastoreBrowserSearchResults) tInfo.getResult();
-            HostDatastoreBrowserSearchResults[] results = null;
-            if (searchResult == null) {
-                return null;
-            }
-            results = searchResult.getHostDatastoreBrowserSearchResults();
-            
-            if (results == null) {
-                return null;
-            }
-            int len = searchResult.getHostDatastoreBrowserSearchResults().length;
-            
-            for (int j = 0; j < len; j++) {
-                HostDatastoreBrowserSearchResults sres = searchResult.HostDatastoreBrowserSearchResults[j];
-                basePath = sres.getFolderPath();
-                FileInfo[] fileArray = sres.getFile();
-                if (fileArray == null) {
-                    continue;
-                }
-                
-                for (FileInfo fileInfo : fileArray) {
-                    fullPath = basePath + fileInfo.getPath();
-                    break;
-                }
-            }
-            
-        } catch (RemoteException | InterruptedException ex) {
-        	LOGGER.error("Cannot find the volume : " + volumeName + " --< message: " + ex.getMessage());
-        	ex.printStackTrace();
-        }
-        
-        
-		return fullPath;
 	}
 	
 	/**
 	 * Is the volume exist on vcenter ?
-	 * @param dc
 	 * @param ds
-	 * @param volumeName 
+	 * @param volumeName
+	 * @param dc
+	 * @param vmName (may be null if volume is not attached).
 	 * @return true if volume exist, else false.
 	 */
-	public static boolean isExistVolumeForName(final Datastore ds, final String volumeName) {
+	public static boolean isExistVolumeForName(Datastore ds, String volumeName, Datacenter dc, String vmName) {
 		// Search the volume on datastore.
-		String fullPath = findVolumeVMDKPathForName(ds, volumeName);
-		return fullPath != null; 
+		if (volume == null) {
+			// Load the volume.
+			loadVolumeInformation(ds, volumeName, dc, vmName);
+		}
+		
+		return volume.isExist();
 	}
 	
 	
@@ -116,96 +68,16 @@ public class VolumeHelper {
 	 * @param dc (Datacenter)
 	 * @param ds (Datastore)
 	 * @param volumeName
+	 * @param volumeSize
 	 */
-	public static void createVolume(final Datacenter dc, final Datastore ds, final String volumeName, final String volumeSize) {
-		String dsName = ds.getName();
-		String fullPath = findVolumeVMDKPathForName(ds, volumeName);
-		
-		// Check if this volume already exist in the datastore.
-		if (fullPath == null) {
-			// The volume doesnt exist, we create it in a temporary directory.
-			try {
-				mkdir(dc, ds, "/tmp");
-			} catch (IOException ex) {
-				LOGGER.error("Error IO : " + ex.getMessage());
-				ex.printStackTrace();
-				return;
-			}
-		}
-		// Create the volume.
-		TODO !!!
-		
-		
-		
+	public static void createVolume(final Datacenter dc, final Datastore ds, final String volumeName, final Float volumeSize) {
+		// build a new disk.
+		// TODO !!!!
 		
 	}
 	
-	/**
-	 * Create a directory for the volume management.
-	 * @param dc
-	 * @param ds
-	 * @param destFolder
-	 * @return
-	 * @throws IOException
-	 */
-    public static boolean mkdir(final Datacenter dc, final Datastore ds, String destFolder) throws IOException {
-        String dsName = ds.getName();
-        destFolder = "[" + dsName + "]" + destFolder;
-        
-        FileManager fileManager = VCenterClient.getServiceInstance().getFileManager();
-        
-        if (fileManager == null) {
-        	LOGGER.warn("File manager is not available on this vcenter server !");
-        	LOGGER.warn("Cant create the directory " + destFolder + " on datastore : " + dsName);
-        	return false;
-        }
-        
-        if (!exists(destFolder, ds)) {
-            LOGGER.info("Creating directory : " + destFolder);
-            fileManager.makeDirectory(destFolder, dc, true);
-            return true;
-        }
-        LOGGER.info("Directory : " + destFolder + " could not be created because it already exists");
-        return false;
-    }
 	
-    /**
-     * Check if a folder exist or a path on the datastore.
-     * @param path
-     * @param ds
-     * @return
-     * @throws IOException
-     */
-    public static boolean exists(String path, Datastore ds) throws IOException {
-        //works for both files and folders
-
-        path = "[" + ds.getName() + "]" + path;
-        
-        HostDatastoreBrowser hdb = ds.getBrowser();
-
-        String[] splitPath = path.split("/");
-        String fileName = splitPath[splitPath.length - 1];
-        String folder = path.substring(0, path.length() - fileName.length());
-        HostDatastoreBrowserSearchSpec fileSearchSpec = new HostDatastoreBrowserSearchSpec();
-        fileSearchSpec.setMatchPattern(new String[]{fileName});
-
-        try {
-            Task task = hdb.searchDatastore_Task(folder, fileSearchSpec);
-            task.waitForTask();
-            HostDatastoreBrowserSearchResults searchResults =
-                    (HostDatastoreBrowserSearchResults) task.getTaskInfo().getResult();
-            if (searchResults == null) {
-                return false;
-            }
-            FileInfo[] fileInfo = searchResults.getFile();
-            return (fileInfo != null && fileInfo.length > 0);
-        } catch (com.vmware.vim25.FileNotFound ex) {
-            //normal case
-        } catch (Exception ex) {
-            LOGGER.error("Exception while testing if " + path + " exists ", ex);
-        }
-
-        return false;
-    }
+	
+    
 	
 }

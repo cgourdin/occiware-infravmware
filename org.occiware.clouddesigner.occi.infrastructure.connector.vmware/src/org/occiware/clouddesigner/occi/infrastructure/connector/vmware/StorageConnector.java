@@ -20,10 +20,15 @@ import org.slf4j.LoggerFactory;
 import com.vmware.vim25.mo.Datacenter;
 import com.vmware.vim25.mo.Datastore;
 import com.vmware.vim25.mo.Folder;
+import com.vmware.vim25.mo.ManagedEntity;
 import com.vmware.vim25.mo.ServiceInstance;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
 import org.occiware.clouddesigner.occi.Link;
+import org.occiware.clouddesigner.occi.Resource;
 import org.occiware.clouddesigner.occi.infrastructure.StorageStatus;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.allocator.AllocatorImpl;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.DatacenterHelper;
@@ -32,13 +37,11 @@ import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VCe
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VolumeHelper;
 
 /**
- * Connector implementation for the OCCI kind:
- * - scheme: http://schemas.ogf.org/occi/infrastructure#
- * - term: storage
- * - title: Storage Resource
+ * Connector implementation for the OCCI kind: - scheme:
+ * http://schemas.ogf.org/occi/infrastructure# - term: storage - title: Storage
+ * Resource
  */
-public class StorageConnector extends org.occiware.clouddesigner.occi.infrastructure.impl.StorageImpl
-{
+public class StorageConnector extends org.occiware.clouddesigner.occi.infrastructure.impl.StorageImpl {
 	/**
 	 * Initialize the logger.
 	 */
@@ -49,11 +52,11 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	private String datastoreName = null;
 	private String datacenterName = null;
 	private String clusterName = null;
+
 	/**
 	 * Constructs a storage connector.
 	 */
-	StorageConnector()
-	{
+	StorageConnector() {
 		LOGGER.debug("Constructor called on " + this);
 	}
 
@@ -65,9 +68,8 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 * Called when this Storage instance is completely created.
 	 */
 	@Override
-	public void occiCreate()
-	{
-		
+	public void occiCreate() {
+
 		LOGGER.debug("occiCreate() called on " + this);
 		if (!VCenterClient.checkConnection()) {
 			// Must return true if connection is established.
@@ -75,55 +77,100 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		}
 		ServiceInstance si = VCenterClient.getServiceInstance();
 		Folder rootFolder = si.getRootFolder();
-		
+
 		AllocatorImpl allocator = new AllocatorImpl(rootFolder);
-		
-		// Determine if this is a main storage, if this is the case, delegate to occiCreate on compute, not here.
+
 		StoragelinkConnector stLink;
 		EList<Link> links = this.getLinks();
-		
+		List<ComputeConnector> computes = new ArrayList<>();
 		if (links.isEmpty()) {
 			LOGGER.warn("No storage link found, the volume is not linked to a compute.");
 		} else {
-			// TODO : Get the storage link to mount the disk and the datastore name (attribute title).
+			// Search for a datastore name on links.
+			this.setDatastoreName(this.findDatastoreNameOnLinks());
+			// Get the linked computes instance.
+			computes = this.getLinkedComputes();
 		}
-		
+
 		Float size = this.getSize();
 		String volumeName = this.getTitle();
-		
-		Datacenter datacenter = DatacenterHelper.findDatacenterForName(rootFolder, this.getDatacenterName());
-		if (datacenter == null) {
-			// Allocate automaticly the datacenter, if no datacenter found, a
-			// default datacenter will be created.
-			datacenter = allocator.allocateDatacenter();
+		Datacenter datacenter = null;
+		Datastore datastore = null;
+
+		if (datastoreName != null) {
+			// Load datastore object.
+			datastore = DatastoreHelper.findDatastoreForName(datacenter, datastoreName);
+			// Search the datacenter with revert list of datastores.
+			datacenter = DatacenterHelper.findDatacenterFromDatastore(rootFolder, datastoreName);
 			if (datacenter == null) {
-				LOGGER.error("Cant allocate a datacenter, cause : no available datacenter to allocate.");
+				LOGGER.error("Cannot create disk : " + volumeName + " , cause: datacenter not found for the datastore: "
+						+ datastore.getName());
+				VCenterClient.disconnect();
+				return;
+			}
+			if (datastore == null) {
+				LOGGER.error("Cant allocate a datastore, cause: datastore is referenced but not found on vcenter, name of the datastore: " + datastoreName);
 				VCenterClient.disconnect();
 				return;
 			}
 		} else {
-			allocator.setDc(datacenter);
+			// Datastore is null, we must assign a datacenter and a
+			// datastore to continue.
+			
+			// Searching on linked vm instance if any.
+			for (ComputeConnector compute : computes) {
+				datacenterName = compute.getDatacenterName();
+				
+				if (datacenterName != null) {
+					// get the datastoreName.
+					datastoreName = compute.getDatastoreName();
+					if (datastoreName != null) {
+						// Load the objects.
+						datacenter = DatacenterHelper.findDatacenterForName(rootFolder, datacenterName);
+						datastore = DatastoreHelper.findDatastoreForName(datacenter, datastoreName);
+						break;
+					}
+				}
+			}
+			
+
+			// if none found, and no links, we allocate automaticly the
+			// datastore and the parent datacenter.
+			if (datastore == null || datacenter == null) {
+				datacenter = allocator.allocateDatacenter();
+				if (datacenter == null) {
+					LOGGER.error("Cant allocate a datacenter, cause : no available datacenter to allocate.");
+					VCenterClient.disconnect();
+					return;
+				}
+				datastore = allocator.allocateDatastore();
+				if (datastore == null) {
+					LOGGER.error("Cant allocate a datastore, cause: no available datastore to allocate.");
+					VCenterClient.disconnect();
+					return;
+				}
+			}
+		}
+		String vmName = null;
+		// if almost one compute is linked, we get its name. 
+		for (ComputeConnector compute : computes) {
+			vmName = compute.getTitle();
+			break;
 		}
 		
-		this.setDatacenterName(datacenter.getName());
+		// Load the volume information. If the volume doesnt exist, the volume object will be null.
+		VolumeHelper.loadVolumeInformation(datastore, volumeName, datacenter, vmName);
 		
 		// Check if the volume already exist in the vcenter.
-		if (VolumeHelper.isExistVolumeForName(datacenter, volumeName)) {
+		if (VolumeHelper.isExistVolumeForName(datastore, volumeName, datacenter, vmName)) {
 			// The volume already exist.
 			LOGGER.warn("Volume : " + volumeName + " already exist in datacenter.");
 			VCenterClient.disconnect();
 			return;
 		}
-		
-		Datastore datastore = null;
-		// Check if the volume already exist in the vcenter.
-		if (datastoreName == null) {
-			// Allocate a datastore.
-			datastore = allocator.allocateDatastore();
-		} else {
-			// Load datastore object.
-			datastore = DatastoreHelper.findDatastoreForName(datacenter, datastoreName);
-		}
+
+		// Create a new disk with or without vm information.
+		VolumeHelper.createVolume(datacenter, datastore, volumeName, this.getSize());
 		
 		
 		// In all case invoke a disconnect from vcenter.
@@ -134,8 +181,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 * Called when this Storage instance must be retrieved.
 	 */
 	@Override
-	public void occiRetrieve()
-	{
+	public void occiRetrieve() {
 		LOGGER.debug("occiRetrieve() called on " + this);
 
 		// TODO: Implement this callback or remove this method.
@@ -145,8 +191,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 * Called when this Storage instance is completely updated.
 	 */
 	@Override
-	public void occiUpdate()
-	{
+	public void occiUpdate() {
 		LOGGER.debug("occiUpdate() called on " + this);
 
 		// TODO: Implement this callback or remove this method.
@@ -156,8 +201,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 * Called when this Storage instance will be deleted.
 	 */
 	@Override
-	public void occiDelete()
-	{
+	public void occiDelete() {
 		LOGGER.debug("occiDelete() called on " + this);
 
 		// TODO: Implement this callback or remove this method.
@@ -168,18 +212,16 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	//
 
 	/**
-	 * Implement OCCI action:
-     * - scheme: http://schemas.ogf.org/occi/infrastructure/storage/action#
-     * - term: online
-     * - title: Set storage online
+	 * Implement OCCI action: - scheme:
+	 * http://schemas.ogf.org/occi/infrastructure/storage/action# - term: online
+	 * - title: Set storage online
 	 */
 	@Override
-	public void online()
-	{
+	public void online() {
 		LOGGER.debug("Action online() called on " + this);
 
 		// Storage State Machine.
-		switch(getState().getValue()) {
+		switch (getState().getValue()) {
 
 		case StorageStatus.ONLINE_VALUE:
 			LOGGER.debug("Fire transition(state=online, action=\"online\")...");
@@ -208,18 +250,16 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	}
 
 	/**
-	 * Implement OCCI action:
-     * - scheme: http://schemas.ogf.org/occi/infrastructure/storage/action#
-     * - term: offline
-     * - title: Set storage offline
+	 * Implement OCCI action: - scheme:
+	 * http://schemas.ogf.org/occi/infrastructure/storage/action# - term:
+	 * offline - title: Set storage offline
 	 */
 	@Override
-	public void offline()
-	{
+	public void offline() {
 		LOGGER.debug("Action offline() called on " + this);
 
 		// Storage State Machine.
-		switch(getState().getValue()) {
+		switch (getState().getValue()) {
 
 		case StorageStatus.ONLINE_VALUE:
 			LOGGER.debug("Fire transition(state=online, action=\"offline\")...");
@@ -246,7 +286,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 			break;
 		}
 	}
-	
+
 	/**
 	 * Usage with Mixin in future.
 	 * 
@@ -261,6 +301,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 
 		return datacenterName;
 	}
+
 	/**
 	 * Usage with Mixin in future.
 	 * 
@@ -278,7 +319,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	public String getDatastoreName() {
 		return datastoreName;
 	}
-	
+
 	/**
 	 * Usage with Mixin in future.
 	 * 
@@ -306,4 +347,55 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		this.clusterName = clusterName;
 	}
 
-}	
+	/**
+	 * Return a list of linked compute connector.
+	 * 
+	 * @return a list of ComputeConnector or empty if no linked instance.
+	 */
+	private List<ComputeConnector> getLinkedComputes() {
+
+		EList<Link> links = this.getLinks();
+		List<ComputeConnector> computes = new ArrayList<>();
+
+		Resource source;
+		Resource target;
+		ComputeConnector instance;
+		for (Link link : links) {
+			source = link.getSource();
+			target = link.getTarget();
+
+			if (source != null && source instanceof ComputeConnector) {
+				instance = (ComputeConnector) source;
+				computes.add(instance);
+			}
+			if (target != null && target instanceof ComputeConnector) {
+				instance = (ComputeConnector) target;
+				computes.add(instance);
+			}
+		}
+
+		return computes;
+	}
+
+	/**
+	 * Find a datastore name on first storageLinks, title attribute.
+	 * 
+	 * @return a datastoreName if found, null if no links found or title
+	 *         attribute on storageLink is null or empty.
+	 */
+	private String findDatastoreNameOnLinks() {
+		String dsName = null;
+		for (Link link : this.getLinks()) {
+			if (link instanceof StoragelinkConnector) {
+				dsName = link.getTitle();
+				if (dsName != null && dsName.isEmpty()) {
+					dsName = null;
+					continue;
+				}
+				break;
+			}
+		}
+		return dsName;
+	}
+
+}

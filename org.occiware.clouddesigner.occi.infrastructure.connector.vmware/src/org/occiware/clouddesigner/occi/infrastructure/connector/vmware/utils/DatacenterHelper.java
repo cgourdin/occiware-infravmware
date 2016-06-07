@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.vmware.vim25.mo.Datacenter;
+import com.vmware.vim25.mo.Datastore;
 import com.vmware.vim25.mo.Folder;
 import com.vmware.vim25.mo.InventoryNavigator;
 import com.vmware.vim25.mo.ManagedEntity;
@@ -70,6 +71,48 @@ public class DatacenterHelper {
 		}
 		return dc;
 	}
+	
+	/**
+	 * Find a datacenter from the datastore.
+	 * @param dsName
+	 * @return
+	 */
+	public static Datacenter findDatacenterFromDatastore(final Folder folder, final String dsName) {
+		Datacenter dc = null;
+		Datacenter dcTmp;
+		try {
+			
+			ManagedEntity[] dcs = new InventoryNavigator(folder).searchManagedEntities("Datacenter");
+			if (dcs != null && dcs.length > 0) {
+				for (ManagedEntity entity : dcs) {
+					dcTmp = (Datacenter) entity;
+					// Search on datastore tab.
+					Datastore[] datastores = dc.getDatastores();
+					if (datastores == null) {
+						LOGGER.warn("No datastore found on this datacenter:  " + dc.getName());
+						continue;
+					}
+					for (Datastore ds : datastores) {
+						if (ds != null && ds.getName().equals(dsName)) {
+							LOGGER.info("Datastore found : " + dsName + " on the datacenter : " + dc.getName());
+							dc = dcTmp;
+							break;
+						}
+					}
+					
+					
+ 				}
+				
+			}
+		} catch (RemoteException ex) {
+			LOGGER.error("Error while searching a datacenter (first on tree) " + ex.getMessage());
+		}
+		if (dc == null) {
+			LOGGER.error("datacenter not found for this datastore: " + dsName);
+		}
+		return dc;
+	}
+	
 
 	/**
 	 * Create a new datacenter on specified folder.
