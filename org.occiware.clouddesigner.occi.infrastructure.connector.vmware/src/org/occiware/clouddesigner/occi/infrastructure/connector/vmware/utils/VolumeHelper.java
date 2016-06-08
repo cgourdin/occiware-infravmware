@@ -3,6 +3,7 @@ package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils;
 import java.io.IOException;
 import java.rmi.RemoteException;
 
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.DiskNotFoundException;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.Volume;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,7 +65,7 @@ public class VolumeHelper {
 	
 	
 	/**
-	 * Create an empty volume with no attachment on vm.
+	 * Create an empty disk with no attachment on vm.
 	 * @param dc (Datacenter)
 	 * @param ds (Datastore)
 	 * @param volumeName
@@ -72,12 +73,69 @@ public class VolumeHelper {
 	 */
 	public static void createVolume(final Datacenter dc, final Datastore ds, final String volumeName, final Float volumeSize) {
 		// build a new disk.
-		// TODO !!!!
-		
+		if (volume == null) {
+			loadVolumeInformation(ds, volumeName, dc, null);
+		}
+		if (volume.isExist()) {
+			LOGGER.warn("The disk " + volumeName + " already exist, cant create it.");
+			return;
+		}
+		if (volume.getVmName() != null) {
+			volume.createAttachedVolume();
+		} else {
+			volume.createEmptyVolume();
+		}
 	}
 	
 	
 	
+	// Delegate methods.
+	/**
+	 * Set the disk size on volume object.
+	 * @param size
+	 */
+    public static void setSize(final Float size) {
+    	if (volume != null) {
+    		volume.setSize(size);
+    	}
+    }
     
+	public static Float getSize() throws DiskNotFoundException {
+		if (volume != null) {
+			return volume.getSize();
+		} else {
+			LOGGER.warn("No disk information loaded, cant give a size.");
+			throw new DiskNotFoundException("No disk information loaded, cant give a size.");
+		}
+	}
+	/**
+	 * 
+	 * @return the volume state, null if no volume defined.
+	 * @throws DiskNotFoundException
+	 */
+	public static String getDiskState() throws DiskNotFoundException {
+		if (volume != null) {
+			return volume.getVolumeState();
+		} else {
+			LOGGER.warn("No disk information loaded, cant give a state.");
+			throw new DiskNotFoundException("No disk information loaded, cant give a state.");
+		}
+	}
+	
+	/**
+	 * 
+	 * @return
+	 * @throws DiskNotFoundException
+	 */
+	public static boolean isAttached() throws DiskNotFoundException {
+		boolean result;
+		if (volume != null) {
+			result = volume.isAttached();
+		} else {
+			LOGGER.warn("No disk information loaded, cant give an attachment state.");
+			throw new DiskNotFoundException("No disk information loaded, cant give an attachment state.");
+		}
+		return result;
+	}
 	
 }
