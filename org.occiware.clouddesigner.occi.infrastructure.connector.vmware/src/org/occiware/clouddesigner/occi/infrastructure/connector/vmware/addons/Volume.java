@@ -30,13 +30,16 @@ import com.vmware.vim25.VirtualDisk;
 import com.vmware.vim25.VirtualDiskAdapterType;
 import com.vmware.vim25.VirtualDiskFlatVer2BackingInfo;
 import com.vmware.vim25.VirtualDiskType;
+import com.vmware.vim25.VirtualMachineConfigInfo;
 import com.vmware.vim25.VirtualMachineConfigSpec;
+import com.vmware.vim25.VirtualMachinePowerState;
 import com.vmware.vim25.VirtualSCSIController;
 import com.vmware.vim25.VmDiskFileQuery;
 import com.vmware.vim25.VmDiskFileQueryFilter;
 import com.vmware.vim25.mo.Datacenter;
 import com.vmware.vim25.mo.Datastore;
 import com.vmware.vim25.mo.FileManager;
+import com.vmware.vim25.mo.Folder;
 import com.vmware.vim25.mo.HostDatastoreBrowser;
 import com.vmware.vim25.mo.Task;
 import com.vmware.vim25.mo.VirtualDiskManager;
@@ -157,13 +160,13 @@ public class Volume {
 				mainVolume = false;
 			}
 			volumeState = vdisk.getConnectable().getStatus();
-			
+
 		} else {
 			// Disk is not attached to a vm.
 			attached = false;
 			// this volume is not the main...
 			mainVolume = false;
-			
+
 			// The disk size has been set on findVolumeVMDKPathForName...
 			volumeState = "detached";
 		}
@@ -373,7 +376,7 @@ public class Volume {
 		attached = true;
 		mainVolume = false;
 		volumeState = vdisk.getConnectable().getStatus();
-		LOGGER.info("Volume status : " + volumeState);
+		LOGGER.info("Volume connectable status : " + volumeState);
 
 	}
 
@@ -413,9 +416,187 @@ public class Volume {
 	/**
 	 * Migrate a volume from one instance vm to another instance vm.
 	 */
-	public void MigrateVolumeInstanceToAnoter() {
+	public void MigrateVolumeInstanceToAnother() {
 		// TODO : migrate a volume from origin instance to destination instance.
 	}
+
+	/**
+	 * Extend a disk to a new size capacity.
+	 * 
+	 * @param newSize
+	 *            (in GB).
+	 * @return true if extend disk is success. false otherwise.
+	 */
+	public boolean resize(Float newSize) {
+		boolean result = false;
+
+		Long sizeKB = newSize.longValue() * 1024 * 1024;
+		LOGGER.info("Resizing volume " + volumeName + " to " + sizeKB);
+		if (dc == null) {
+			LOGGER.error("Cant resize the disk, dont know the datacenter.");
+			return result;
+		}
+
+		if (fullPath == null) {
+			fullPath = findVolumeVMDKPathForName();
+			if (fullPath == null) {
+				LOGGER.error("No vmware path found on this volume, cant resize the volume");
+				return result;
+			}
+		} else {
+			LOGGER.debug("Full path: " + fullPath);
+		}
+
+		VirtualDiskManager vdiskManager = VCenterClient.getServiceInstance().getVirtualDiskManager();
+		if (vdiskManager != null) {
+			// Launch the task.
+			Task task;
+			try {
+				task = vdiskManager.extendVirtualDisk_Task(fullPath, dc, sizeKB);
+				task.waitForTask();
+
+			} catch (RemoteException | InterruptedException e) {
+				LOGGER.error("Error while resizing a disk : " + volumeName, e);
+				return result;
+			}
+
+			TaskInfo taskInfo;
+			try {
+				taskInfo = task.getTaskInfo();
+				if (taskInfo.getState() != TaskInfoState.success) {
+
+					MethodFault fault = taskInfo.getError().getFault();
+					LOGGER.error("Error while resizing a disk : " + volumeName, fault.detail);
+					LOGGER.error("Fault message: " + fault.getMessage());
+				} else {
+					size = newSize;
+					result = true;
+				}
+			} catch (RemoteException e) {
+				LOGGER.error("Error while resizing a disk : " + volumeName, e);
+			}
+		} else {
+			// Cant use virtualDisk manager.
+			loadVirtualDisk();
+			if (isAttached() && vdisk != null) {
+				vdisk.setCapacityInKB(sizeKB);
+				// Load the virtual machine
+				Folder rootFolder = VCenterClient.getServiceInstance().getRootFolder();
+				VirtualMachine vm = VMHelper.findVMForName(rootFolder, vmName);
+				VirtualDeviceConfigSpec vdcs = new VirtualDeviceConfigSpec();
+				vdcs.setDevice(vdisk);
+				vdcs.setOperation(VirtualDeviceConfigSpecOperation.edit);
+				VirtualMachineConfigSpec vmcs = new VirtualMachineConfigSpec();
+				vmcs.setDeviceChange(new VirtualDeviceConfigSpec[] { vdcs });
+
+				Task task;
+				try {
+					task = vm.reconfigVM_Task(vmcs);
+					task.waitForTask();
+
+				} catch (RemoteException | InterruptedException e) {
+					LOGGER.error("Error while resizing a disk : " + volumeName, e);
+					return result;
+				}
+
+				TaskInfo taskInfo;
+				try {
+					taskInfo = task.getTaskInfo();
+					if (taskInfo.getState() != TaskInfoState.success) {
+
+						MethodFault fault = taskInfo.getError().getFault();
+						LOGGER.error("Error while resizing a disk : " + volumeName, fault.detail);
+						LOGGER.error("Fault message: " + fault.getMessage());
+					} else {
+						size = newSize;
+						result = true;
+					}
+				} catch (RemoteException e) {
+					LOGGER.error("Error while resizing a disk : " + volumeName, e);
+				}
+
+			} else {
+				// Volume not attached and cant use virtual disk manager.
+				LOGGER.warn("Cant resize the disk, the disk must be attached to a virtual machine or you must have the rights to VirtualDiskManager file operation.");
+			}
+
+		}
+		return result;
+
+	}
+	
+	/**
+	 * Rename a disk from volumeName to newVolumeName.
+	 * @param newVolumeName
+	 * @return true if rename operation has succeed.
+	 */
+	public boolean renameDisk(final String newVolumeName) {
+		boolean result = false;
+		// Check if we must power off the vm, only if the disk is attached..
+		if (isAttached()) {
+			// Load the vm.
+			Folder rootFolder = VCenterClient.getServiceInstance().getRootFolder();
+			VirtualMachine vm = VMHelper.findVMForName(rootFolder, vmName);
+			if (vm != null) {
+				if (!vm.getRuntime().getPowerState().equals(VirtualMachinePowerState.poweredOff)) {
+					// Power off before.
+					VMHelper.powerOff(vm);
+				}
+			}
+			if (vdisk == null) {
+				loadVirtualDisk();
+			}
+			
+			
+		} // end if isAttached.
+		
+		String[] paths = fullPath.split("/");
+		String newPath = "";
+		int lengthName = volumeName.length();
+		
+		for (String path : paths) {
+			
+			if (path.length() == lengthName) {
+				break;
+			}
+			newPath += "/" + path ;
+			
+		}
+		newPath += "/" + newVolumeName + ".vmdk";
+		LOGGER.debug("Moving disk vmdk : " + fullPath + " --< to: " + newPath);
+		Task task;
+		try {
+			VirtualDiskManager vdiskManager = VCenterClient.getServiceInstance().getVirtualDiskManager();
+			task = vdiskManager.moveVirtualDisk_Task(fullPath, dc, newPath, dc, true);
+			task.waitForTask();
+		} catch (RemoteException | InterruptedException ex) {
+			LOGGER.error("Error while renaming a disk : " + volumeName + " to: " + newVolumeName, ex);
+			return result;
+		}
+		TaskInfo taskInfo;
+		try {
+			taskInfo = task.getTaskInfo();
+			if (taskInfo.getState() != TaskInfoState.success) {
+
+				MethodFault fault = taskInfo.getError().getFault();
+				LOGGER.error("Error while renaming a disk : " + volumeName + " to: " + newVolumeName, fault.detail);
+				LOGGER.error("Fault message: " + fault.getMessage());
+			} else {
+				volumeName = newVolumeName;
+				fullPath = newPath;
+				result = true;
+			}
+		} catch (RemoteException e) {
+			LOGGER.error("Error while renaming a disk : " + volumeName, e);
+		}
+		
+		return result;
+	}
+	
+	
+	
+
+	// Utility methods.
 
 	/**
 	 * Create a directory for the volume management.
@@ -508,7 +689,7 @@ public class Volume {
 				for (FileInfo fileInfo : fileArray) {
 					fullPath = basePath + fileInfo.getPath();
 					// Real size on datastore.
-					size = fileInfo.getFileSize().floatValue() / (1024 * 1024); 
+					size = fileInfo.getFileSize().floatValue() / (1024 * 1024);
 					modifiedDate = fileInfo.getModification();
 					break;
 				}

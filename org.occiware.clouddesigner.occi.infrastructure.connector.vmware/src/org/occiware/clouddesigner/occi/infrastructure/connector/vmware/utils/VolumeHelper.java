@@ -55,7 +55,7 @@ public class VolumeHelper {
 	 */
 	public static boolean isExistVolumeForName(Datastore ds, String volumeName, Datacenter dc, String vmName) {
 		// Search the volume on datastore.
-		if (volume == null) {
+		if (!checkVolume(volumeName)) {
 			// Load the volume.
 			loadVolumeInformation(ds, volumeName, dc, vmName);
 		}
@@ -65,7 +65,7 @@ public class VolumeHelper {
 	
 	
 	/**
-	 * Create an empty disk with no attachment on vm.
+	 * Create an empty disk if no attachment on vm or a virtual disk attached to a vm.
 	 * @param dc (Datacenter)
 	 * @param ds (Datastore)
 	 * @param volumeName
@@ -73,7 +73,7 @@ public class VolumeHelper {
 	 */
 	public static void createVolume(final Datacenter dc, final Datastore ds, final String volumeName, final Float volumeSize) {
 		// build a new disk.
-		if (volume == null) {
+		if (!checkVolume(volumeName)) {
 			loadVolumeInformation(ds, volumeName, dc, null);
 		}
 		if (volume.isExist()) {
@@ -94,14 +94,14 @@ public class VolumeHelper {
 	 * Set the disk size on volume object.
 	 * @param size
 	 */
-    public static void setSize(final Float size) {
-    	if (volume != null) {
+    public static void setSize(final String volumeName, final Float size) {
+    	if (checkVolume(volumeName)) {
     		volume.setSize(size);
-    	}
+    	} 
     }
     
-	public static Float getSize() throws DiskNotFoundException {
-		if (volume != null) {
+	public static Float getSize(String volumeName) throws DiskNotFoundException {
+		if (checkVolume(volumeName)) {
 			return volume.getSize();
 		} else {
 			LOGGER.warn("No disk information loaded, cant give a size.");
@@ -113,8 +113,8 @@ public class VolumeHelper {
 	 * @return the volume state, null if no volume defined.
 	 * @throws DiskNotFoundException
 	 */
-	public static String getDiskState() throws DiskNotFoundException {
-		if (volume != null) {
+	public static String getDiskState(final String volumeName) throws DiskNotFoundException {
+		if (checkVolume(volumeName)) {
 			return volume.getVolumeState();
 		} else {
 			LOGGER.warn("No disk information loaded, cant give a state.");
@@ -127,9 +127,9 @@ public class VolumeHelper {
 	 * @return
 	 * @throws DiskNotFoundException
 	 */
-	public static boolean isAttached() throws DiskNotFoundException {
+	public static boolean isAttached(final String volumeName) throws DiskNotFoundException {
 		boolean result;
-		if (volume != null) {
+		if (checkVolume(volumeName)) {
 			result = volume.isAttached();
 		} else {
 			LOGGER.warn("No disk information loaded, cant give an attachment state.");
@@ -137,5 +137,56 @@ public class VolumeHelper {
 		}
 		return result;
 	}
+	
+	/**
+	 * Resize the specified disk.
+	 * @param dc
+	 * @param ds
+	 * @param volumeName
+	 * @param vmName
+	 */
+	public static void resizeDisk(final String volumeName, Float newSize) throws DiskNotFoundException {
+		
+		if (checkVolume(volumeName)) {
+			volume.resize(newSize);
+			
+		} else {
+			LOGGER.warn("No disk information loaded, cant resize the disk.");
+			throw new DiskNotFoundException("No disk information loaded, cant resize the disk.");
+		}
+		
+		
+	}
+	
+	/**
+	 * Rename a disk from oldVolumeName to newVolumeName and the vmdk file accordingly.
+	 * @param oldVolumeName
+	 * @param newVolumeName
+	 * @throws DiskNotFoundException
+	 */
+	public static void renameDisk(final String oldVolumeName, final String newVolumeName) throws DiskNotFoundException {
+		if (checkVolume(oldVolumeName)) {
+			volume.renameDisk(newVolumeName);
+			
+		} else {
+			LOGGER.warn("No disk information loaded, cant rename the disk: " + oldVolumeName);
+			throw new DiskNotFoundException("No disk information loaded, cant rename the disk : " + oldVolumeName);
+		}
+	}
+	
+	
+	/**
+	 * Check if volume object is the good one with volumeName info.
+	 * @param volumeName
+	 * @return true if ok, false otherwise.
+	 */
+	private static boolean checkVolume(final String volumeName) {
+		boolean result = false;
+		if (volume != null && volume.getVolumeName().equals(volumeName)) {			
+				result = true;
+		}
+		return result;
+	}
+	
 	
 }

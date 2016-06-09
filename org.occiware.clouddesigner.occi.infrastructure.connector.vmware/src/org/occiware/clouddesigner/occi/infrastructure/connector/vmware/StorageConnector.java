@@ -183,7 +183,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 			VCenterClient.disconnect();
 			return;
 		}
-		VolumeHelper.setSize(this.getSize());
+		VolumeHelper.setSize(volumeName, this.getSize());
 
 		// Create a new disk with or with or without vm information.
 		VolumeHelper.createVolume(datacenter, datastore, volumeName, this.getSize());
@@ -308,11 +308,11 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		// Update disk information on screen.
 		try {
 			this.setMessage(null);
-			size = VolumeHelper.getSize();
+			size = VolumeHelper.getSize(volumeName);
 			if (size == 0.0f) {
 				this.setState(StorageStatus.ERROR);
 			} else {
-				if (VolumeHelper.isAttached()) {
+				if (VolumeHelper.isAttached(volumeName)) {
 					this.setState(StorageStatus.ONLINE);
 				} else {
 					this.setState(StorageStatus.OFFLINE);
@@ -337,13 +337,36 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 			// Must return true if connection is established.
 			return;
 		}
+		String volumeName = this.getTitle();
+		
+		if (oldDiskName == null) {
+			oldDiskName = volumeName;
+		}
+		if (oldDiskSize == null) {
+			oldDiskSize = this.getSize();
+		}
 		
 		
-		// Resizing ?
+		// Resizing.
+		if (oldDiskSize != size) {
+			VolumeHelper.setSize(volumeName, size);
+			try {
+				VolumeHelper.resizeDisk(volumeName, size);
+			} catch (DiskNotFoundException ex) {
+				this.setMessage(ex.getMessage());
+			}
+		}
 		
-		
-		// Renaming ? (include vmdk file).
-		
+		// Renaming. (include vmdk file rename).
+		if (!oldDiskName.equals(volumeName)) {
+			// Try to rename the disk (and the vmdk file).
+			try {
+				VolumeHelper.renameDisk(oldDiskName, volumeName);
+			} catch (DiskNotFoundException ex) {
+				this.setMessage(ex.getMessage());
+			}
+			
+		}
 		
 		// In all case invoke a disconnect from vcenter.
 		VCenterClient.disconnect();
