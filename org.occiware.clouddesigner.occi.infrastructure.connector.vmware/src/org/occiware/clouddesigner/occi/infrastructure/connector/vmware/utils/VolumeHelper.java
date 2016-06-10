@@ -3,8 +3,10 @@ package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils;
 import java.io.IOException;
 import java.rmi.RemoteException;
 
-import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.DiskNotFoundException;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.Volume;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.AttachDiskException;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.DetachDiskException;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.DiskNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -145,16 +147,16 @@ public class VolumeHelper {
 	 * @param volumeName
 	 * @param vmName
 	 */
-	public static void resizeDisk(final String volumeName, Float newSize) throws DiskNotFoundException {
-		
+	public static boolean resizeDisk(final String volumeName, Float newSize) throws DiskNotFoundException {
+		boolean result = false;
 		if (checkVolume(volumeName)) {
-			volume.resize(newSize);
+			result = volume.resize(newSize);
 			
 		} else {
 			LOGGER.warn("No disk information loaded, cant resize the disk.");
 			throw new DiskNotFoundException("No disk information loaded, cant resize the disk.");
 		}
-		
+		return result;
 		
 	}
 	
@@ -162,16 +164,96 @@ public class VolumeHelper {
 	 * Rename a disk from oldVolumeName to newVolumeName and the vmdk file accordingly.
 	 * @param oldVolumeName
 	 * @param newVolumeName
+	 * @return true if operation succeed
 	 * @throws DiskNotFoundException
 	 */
-	public static void renameDisk(final String oldVolumeName, final String newVolumeName) throws DiskNotFoundException {
+	public static boolean renameDisk(final String oldVolumeName, final String newVolumeName) throws DiskNotFoundException {
+		boolean result = false;
 		if (checkVolume(oldVolumeName)) {
-			volume.renameDisk(newVolumeName);
+			result = volume.renameDisk(newVolumeName);
 			
 		} else {
 			LOGGER.warn("No disk information loaded, cant rename the disk: " + oldVolumeName);
 			throw new DiskNotFoundException("No disk information loaded, cant rename the disk : " + oldVolumeName);
 		}
+		return result;
+	}
+	
+	/**
+	 * Destroy definitively a disk from vcenter. If the disk is attached, the disk is detached before.
+	 * @param volumeName
+	 * @param dc
+	 * @param ds
+	 * @param vmName
+	 * @throws DetachDiskException 
+	 */
+	public static boolean destroyDisk(final String volumeName, final Datacenter dc, final Datastore ds, final String vmName) throws DetachDiskException {
+		boolean result = false;
+		if (checkVolume(volumeName)) {
+			// The volume is loaded
+			// Destroy the vmdk.
+			if (volume.isAttached()) {
+				// Detach the disk before the deletion.
+				result = detachDisk(volumeName);
+				if (!result) {
+					LOGGER.warn("The disk is attached and cannot be detached ! Please, check your system after deletion.");
+				}
+				result = false;
+			}
+			result = volume.destroyVolume();
+			
+		} else {
+			if (isExistVolumeForName(ds, volumeName, dc, vmName)) {
+				// disk is reloaded successfully, destroy the vmdk.
+				result = volume.destroyVolume();
+			}
+		}
+		return result;
+	}
+	
+	
+	/**
+	 * Detach the disk from vm instance. 
+	 * @param volumeName
+	 * @throws DetachDiskException 
+	 */
+	public static boolean detachDisk(final String volumeName) throws DetachDiskException {
+		boolean result = false;
+		if (checkVolume(volumeName)) {
+			if (volume.isAttached()) {
+				result = volume.detachVolume();
+			}
+		}
+		return result;
+	}
+	
+	
+	/**
+	 * Attach the disk from vm instance.
+	 * @param volumeName
+	 * @param vmName
+	 * @throws AttachDiskException 
+	 * @throws DetachDiskException 
+	 */
+	public static boolean attachDisk(final String volumeName, final String vmName) throws AttachDiskException, DetachDiskException {
+		boolean result = false;
+		if (checkVolume(volumeName)) {
+			if (volume.isAttached()) {
+				result = detachDisk(volumeName);
+				if (!result && volume.isAttached()) {
+					LOGGER.warn("Cant detach the disk, please check your configuration and logs.");
+				}
+				result = false;
+			}
+			
+			result = volume.attachVolume();
+			
+			if (!result) {
+				LOGGER.warn("Cant attach the disk: " + volumeName + " to: " + vmName);
+			}
+			
+		}
+		return result;
 	}
 	
 	

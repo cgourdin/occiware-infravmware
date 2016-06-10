@@ -1,4 +1,4 @@
-package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons;
+package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions;
 
 public class DiskNotFoundException extends Exception {
 

@@ -53,7 +53,7 @@ public class AllocatorImpl implements Allocator {
 	}
 
 	/**
-	 * Allocate the first datacenter found in tree, if not found we create a new datacenter defaulted to datacenter1.
+	 * Allocate the first datacenter found in tree.
 	 */
 	@Override
 	public Datacenter allocateDatacenter() {
@@ -61,7 +61,8 @@ public class AllocatorImpl implements Allocator {
 		dc = DatacenterHelper.findFirstDatacenter(rootFolder);
 		if (dc == null) {
 			// None has been found, creating a new one.
-			dc = DatacenterHelper.createDatacenter(rootFolder, "datacenter1");
+			// dc = DatacenterHelper.createDatacenter(rootFolder, "datacenter1");
+			LOGGER.error("No datacenter available to allocate.");
 		}
 		
 		return dc;
