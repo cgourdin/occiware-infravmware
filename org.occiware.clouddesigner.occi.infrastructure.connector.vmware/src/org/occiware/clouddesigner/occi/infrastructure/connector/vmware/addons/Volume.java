@@ -126,7 +126,12 @@ public class Volume {
 	 * volume doesnt exist anymore.
 	 */
 	public void loadVolume() {
-		// 1 - Check if volume exist.
+		
+		if (ds == null) {
+			LOGGER.error("Cant load the disk information without datastore reference.");
+			return;
+		}
+		
 		if (fullPath == null) {
 			// Load the fullPath and check if it exist.
 			fullPath = findVolumeVMDKPathForName();
@@ -161,7 +166,10 @@ public class Volume {
 			} else {
 				mainVolume = false;
 			}
-			volumeState = vdisk.getConnectable().getStatus();
+			if (attached) {
+				volumeState = "attached";
+			}
+			
 
 		} else {
 			// Disk is not attached to a vm.
@@ -232,7 +240,7 @@ public class Volume {
 			// The volume doesnt exist, we create it in a temporary directory.
 			try {
 				mkdir(dc, ds, "/tmp");
-				fullPath = "[" + ds.getName() + "] " + "/tmp" + "/" + volumeName;
+				fullPath = "[" + ds.getName() + "] " + "tmp" + "/" + volumeName + ".vmdk";
 			} catch (IOException ex) {
 				LOGGER.error("Error IO : " + ex.getMessage());
 				ex.printStackTrace();
@@ -243,8 +251,8 @@ public class Volume {
 			LOGGER.error("Cant create the disk, it already exist for this path : " + fullPath);
 			return;
 		}
-		if ((size.longValue() * 1024) < 2) {
-			LOGGER.error("Cant create the disk, the size is not setted correctly, size must be superior of 2 MB");
+		if (size.longValue() <= 0L) {
+			LOGGER.error("Cant create the disk, the size is not setted correctly, size must be superior or equal to 1 GB");
 			return;
 		}
 
@@ -253,11 +261,10 @@ public class Volume {
 		try {
 			VirtualDiskManager diskManager = VCenterClient.getServiceInstance().getVirtualDiskManager();
 			FileBackedVirtualDiskSpec fbvspec = new FileBackedVirtualDiskSpec();
-			fbvspec.setAdapterType(VirtualDiskAdapterType.lsiLogic.toString());
+			fbvspec.setAdapterType(VirtualDiskAdapterType.lsiLogic.name());
 			fbvspec.setCapacityKb(size.longValue() * (1024 * 1024));
-
-			fbvspec.setDiskType(VirtualDiskType.thick.toString());
-			Task task = diskManager.createVirtualDisk_Task(volumeName + ".vmdk", null, fbvspec);
+			fbvspec.setDiskType(VirtualDiskType.thin.name());
+			Task task = diskManager.createVirtualDisk_Task(fullPath, dc, fbvspec);
 			task.waitForTask();
 			TaskInfo taskInfo;
 
@@ -311,14 +318,23 @@ public class Volume {
 					+ " , cant create the attached disk.");
 			return;
 		}
+		
 		// Define the full filename path.
 		fullPath = "[" + ds.getName() + "] " + vm.getName() + "/" + volumeName + ".vmdk";
-
+		
+		// Check if the disk already exist on this path.
+		if (exists(fullPath, ds)) {
+			LOGGER.warn("The disk " + volumeName + " already exist, cant create.");
+			exist = true;
+			return;
+		}
+		
+		
 		VirtualDisk mainDisk = findVirtualDiskForScsiId(vm, 0);
 		VirtualDiskFlatVer2BackingInfo vdMainBackingInfo = (VirtualDiskFlatVer2BackingInfo) mainDisk.getBacking();
 		disk = new VirtualDisk();
 		Integer scsiId = getFreeUnitNumber(vm);
-		if (scsiId > 13 || scsiId == 0) {
+		if (scsiId > 14 || scsiId == 0) {
 			LOGGER.error(
 					"No available scsi unit number, please check your vm configuration, cant create the attached disk.");
 			return;
@@ -375,7 +391,7 @@ public class Volume {
 				MethodFault fault = taskInfo.getError().getFault();
 				LOGGER.error("Error while creating an attached disk : " + volumeName + " --< to vm : " + vm.getName(),
 						fault.detail);
-				LOGGER.error("Fault message: " + fault.getMessage());
+				LOGGER.error("Fault message: " + fault.getMessage() + fault.getClass().getName());
 			}
 		} catch (RemoteException e) {
 			LOGGER.error("Error while creating an attached disk : " + volumeName + " --< to vm : " + vm.getName(), e);
@@ -384,12 +400,20 @@ public class Volume {
 
 		// Update the vdisk infos.
 		vdisk = findVirtualDiskForScsiId(vm, scsiId);
-		attached = true;
-		exist = true;
-		mainVolume = false;
-		volumeState = vdisk.getConnectable().getStatus();
-		LOGGER.info("Volume connectable status : " + volumeState);
-
+		if (vdisk != null) {
+			attached = true;
+			exist = true;
+			mainVolume = false;
+			// Connectable object is null here, custom status....
+			volumeState = "connected";
+			LOGGER.info("The disk is created and attached.");
+		} else {
+			LOGGER.warn("Cant reload the disk. Check on vcenter (or with retrieve operation) if the disk is created.");
+			volumeState = "error";
+			attached = false;
+			mainVolume = false;
+			exist = false;
+		}
 	}
 
 	/**
@@ -414,6 +438,7 @@ public class Volume {
 			LOGGER.error("The datastore is not setted, cant destroy the disk " + volumeName);
 			return result;
 		}
+		
 		fullPath = findVolumeVMDKPathForName();
 		if (fullPath == null) {
 			LOGGER.error("The disk path on vcenter is not found, cant destroy the disk " + volumeName);
@@ -438,7 +463,7 @@ public class Volume {
 			if (taskInfo.getState() != TaskInfoState.success) {
 				MethodFault fault = taskInfo.getError().getFault();
 				LOGGER.error("Error while destroying a disk : " + volumeName, fault.detail);
-				LOGGER.error("Fault message: " + fault.getMessage());
+				LOGGER.error("Fault message: " + fault.getMessage() + " fault: " + fault.getClass().getName());
 			} else {
 				// OK, now destroy the hiding file flat version.
 				String flatName = fullPath.substring(0, volumeName.length() - 5) + "-flat.vmdk";
@@ -447,12 +472,16 @@ public class Volume {
 				taskInfo = task.getTaskInfo();
 				if (taskInfo.getState() != TaskInfoState.success) {
 					MethodFault fault = taskInfo.getError().getFault();
-					LOGGER.error("Error while destroying a disk : " + volumeName, fault.detail);
-					LOGGER.error("Fault message: " + fault.getMessage());
+					LOGGER.error("Error while destroying a flat disk : " + volumeName, fault.detail);
+					LOGGER.error("Fault message: " + fault.getMessage() + " fault : " + fault.getClass().getName());
 
 				} else {
 					LOGGER.info("The disk " + volumeName + " has been destroyed.");
 					result = true;
+					volumeState = "deleted";
+					exist = false;
+					attached = false;
+					mainVolume = false;
 				}
 			}
 		} catch (RemoteException | InterruptedException e) {
@@ -761,19 +790,8 @@ public class Volume {
 
 		} // end if isAttached.
 
-		String[] paths = fullPath.split("/");
-		String newPath = "";
-		int lengthName = volumeName.length();
-
-		for (String path : paths) {
-
-			if (path.length() == lengthName) {
-				break;
-			}
-			newPath += "/" + path;
-
-		}
-		newPath += "/" + newVolumeName + ".vmdk";
+		String newPath = "[" + ds.getName() + "] " + vmName + "/" + newVolumeName + ".vmdk"; 
+		
 		LOGGER.debug("Moving disk vmdk : " + fullPath + " --< to: " + newPath);
 		Task task;
 		try {
@@ -791,7 +809,7 @@ public class Volume {
 
 				MethodFault fault = taskInfo.getError().getFault();
 				LOGGER.error("Error while renaming a disk : " + volumeName + " to: " + newVolumeName, fault.detail);
-				LOGGER.error("Fault message: " + fault.getMessage());
+				LOGGER.error("Fault message: " + fault.getMessage() + " fault:" + fault.getClass().getName());
 			} else {
 				volumeName = newVolumeName;
 				fullPath = newPath;
@@ -799,10 +817,29 @@ public class Volume {
 			}
 		} catch (RemoteException e) {
 			LOGGER.error("Error while renaming a disk : " + volumeName, e);
+			LOGGER.error("Message: "+ e.getMessage());
 		}
 
 		return result;
 	}
+	
+	/**
+	 * Get the uuid of this disk (vmware value).
+	 * @return
+	 */
+	public String getUUID() {
+		String uuid = "unknwown";
+		VirtualDiskManager virtDiskMgr = VCenterClient.getServiceInstance().getVirtualDiskManager();
+		try {
+			uuid = virtDiskMgr.queryVirtualDiskUuid(fullPath, dc);
+		} catch (RemoteException ex) {
+			LOGGER.error("Remote error : " + ex.getMessage());
+		}
+		
+		return uuid;
+	}
+	
+	
 
 	// Utility methods.
 
@@ -897,7 +934,7 @@ public class Volume {
 				for (FileInfo fileInfo : fileArray) {
 					fullPath = basePath + fileInfo.getPath();
 					// Real size on datastore.
-					size = fileInfo.getFileSize().floatValue() / (1024 * 1024);
+					size = fileInfo.getFileSize().floatValue() / (1024 * 1024 * 1024); // File info is in bytes not kilo !!!
 					modifiedDate = fileInfo.getModification();
 					break;
 				}
@@ -921,9 +958,10 @@ public class Volume {
 	 */
 	private static boolean exists(String path, Datastore ds) {
 		// works for both files and folders
-
-		path = "[" + ds.getName() + "]" + path;
-
+		String basePath = "[" + ds.getName() + "]";
+		if (!path.contains(basePath)) {
+			path = "[" + ds.getName() + "]" + path;
+		}
 		HostDatastoreBrowser hdb = ds.getBrowser();
 
 		String[] splitPath = path.split("/");

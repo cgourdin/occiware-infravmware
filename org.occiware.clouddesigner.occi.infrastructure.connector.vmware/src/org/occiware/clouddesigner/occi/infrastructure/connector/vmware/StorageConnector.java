@@ -158,7 +158,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 
 		// Create a new disk with or with or without vm information.
 		VolumeHelper.createVolume(datacenter, datastore, volumeName, this.getSize());
-
+		occiRetrieve();
 		// In all case invoke a disconnect from vcenter.
 		VCenterClient.disconnect();
 	}
@@ -185,11 +185,15 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		} catch (DatacenterNotFoundException | DatastoreNotFoundException ex) {
 			if (datastore == null) {
 				LOGGER.error("Cant locate a datastore for this storage disk.");
+				this.setState(StorageStatus.ERROR);
+				this.setMessage("Cant locate a datastore for this storage disk.");
 				VCenterClient.disconnect();
 				return;
 			}
 			if (datacenter == null) {
 				LOGGER.error("Cant locate a datacenter for this storage disk.");
+				this.setState(StorageStatus.ERROR);
+				this.setMessage("Cant locate a datacenter for this storage disk.");
 				VCenterClient.disconnect();
 				return;
 			}
@@ -216,6 +220,12 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		// Update disk information on screen.
 		try {
 			this.setMessage(null);
+			if (!VolumeHelper.isExistVolumeForName(datastore, volumeName, datacenter, vmName)) {
+				LOGGER.error("Cant find the disk on vcenter, there's no disk with the name : " + volumeName);
+				this.setState(StorageStatus.ERROR);
+				this.setMessage("Cant find the disk on vcenter, there's no disk with the name : " + volumeName);
+				return;
+			}
 			size = VolumeHelper.getSize(volumeName);
 			if (size == 0.0f) {
 				this.setState(StorageStatus.ERROR);
@@ -225,6 +235,8 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 				} else {
 					this.setState(StorageStatus.OFFLINE);
 				}
+				assignDeviceIdStorageToStorageLink(volumeName);
+				
 			}
 		} catch (DiskNotFoundException ex) {
 			LOGGER.error(ex.getMessage());
@@ -284,7 +296,12 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		if (!oldDiskName.equals(volumeName)) {
 			// Try to rename the disk (and the vmdk file).
 			try {
-				VolumeHelper.renameDisk(oldDiskName, volumeName);
+				boolean result = VolumeHelper.renameDisk(oldDiskName, volumeName);
+				if (result) {
+					oldDiskName = volumeName;
+					occiRetrieve();
+				}
+				
 			} catch (DiskNotFoundException ex) {
 				this.setMessage(ex.getMessage());
 			}
@@ -326,6 +343,8 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		}
 		try {
 			VolumeHelper.destroyDisk(volumeName, datacenter, datastore, vmName);
+			this.setState(StorageStatus.OFFLINE);
+			this.setMessage("The disk " + volumeName + " has been deleted.");
 		} catch (DetachDiskException ex) {
 			this.setMessage(ex.getMessage());
 			this.setState(StorageStatus.ERROR);
@@ -525,6 +544,23 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	}
 
 	/**
+	 * Assign uuid to deviceId on all storageLinkConnector.
+	 */
+	public void assignDeviceIdStorageToStorageLink(final String volumeName) {
+		EList<Link> links = this.getLinks();
+		for (Link link : links) {
+			if (link instanceof StoragelinkConnector) {
+				StoragelinkConnector linkst = (StoragelinkConnector) link;
+				linkst.setDeviceid(VolumeHelper.getDiskUUID(volumeName));
+			}
+		}
+		
+	}
+	
+	
+	// Getters and setters and private methods.
+	
+	/**
 	 * Usage with Mixin in future.
 	 * 
 	 * @return
@@ -652,7 +688,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 
 		if (datastoreName != null) {
 			// Load datastore object.
-			datastore = DatastoreHelper.findDatastoreForName(datacenter, datastoreName);
+			datastore = DatastoreHelper.findDatastoreForName(rootFolder, datastoreName);
 			// Search the datacenter with revert list of datastores.
 			datacenter = DatacenterHelper.findDatacenterFromDatastore(rootFolder, datastoreName);
 
@@ -681,5 +717,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 			}
 		}
 	}
+	
+	
 
 }

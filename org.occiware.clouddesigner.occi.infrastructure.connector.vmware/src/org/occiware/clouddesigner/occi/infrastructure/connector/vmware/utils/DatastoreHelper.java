@@ -44,11 +44,29 @@ public class DatastoreHelper {
 			datastore = (Datastore) new InventoryNavigator(datacenter).searchManagedEntity(StoragelinkConnector.DATASTORE, name);
 					
 		} catch (RemoteException ex) {
-			LOGGER.error("Error while searching a virtual machine : " + name + " --> " + ex.getMessage());
+			LOGGER.error("Error while searching a datastore : " + name + " --> " + ex.getMessage());
 		}
 		
 		return datastore;
 	}
+	
+	/**
+	 * Find a datastore from a folder (usually root folder).
+	 * @param name
+	 * @return a datastore, if none, null value.
+	 */
+	public static Datastore findDatastoreForName(final Folder folder, final String name) {
+		Datastore datastore = null;
+		try {
+			datastore = (Datastore) new InventoryNavigator(folder).searchManagedEntity(StoragelinkConnector.DATASTORE, name);
+					
+		} catch (RemoteException ex) {
+			LOGGER.error("Error while searching a datastore : " + name + " --> " + ex.getMessage());
+		}
+		
+		return datastore;
+	}
+	
 	
 	/**
 	 * Check if a datastore exist in folder tree , for name.

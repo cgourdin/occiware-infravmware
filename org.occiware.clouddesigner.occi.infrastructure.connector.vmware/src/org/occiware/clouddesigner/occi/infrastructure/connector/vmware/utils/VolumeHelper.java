@@ -161,6 +161,20 @@ public class VolumeHelper {
 	}
 	
 	/**
+	 * Get the uuid of the disk.
+	 * @param volumeName
+	 * @return 
+	 */
+	public static String getDiskUUID(String volumeName) {
+		String uuid = "unknown";
+		if (checkVolume(volumeName)) {
+			uuid = volume.getUUID();
+		}
+		return uuid;
+	}
+	
+	
+	/**
 	 * Rename a disk from oldVolumeName to newVolumeName and the vmdk file accordingly.
 	 * @param oldVolumeName
 	 * @param newVolumeName

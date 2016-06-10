@@ -87,14 +87,14 @@ public class DatacenterHelper {
 				for (ManagedEntity entity : dcs) {
 					dcTmp = (Datacenter) entity;
 					// Search on datastore tab.
-					Datastore[] datastores = dc.getDatastores();
+					Datastore[] datastores = dcTmp.getDatastores();
 					if (datastores == null) {
-						LOGGER.warn("No datastore found on this datacenter:  " + dc.getName());
+						LOGGER.warn("No datastore found on this datacenter:  " + dcTmp.getName());
 						continue;
 					}
 					for (Datastore ds : datastores) {
 						if (ds != null && ds.getName().equals(dsName)) {
-							LOGGER.info("Datastore found : " + dsName + " on the datacenter : " + dc.getName());
+							LOGGER.info("Datastore found : " + dsName + " on the datacenter : " + dcTmp.getName());
 							dc = dcTmp;
 							break;
 						}

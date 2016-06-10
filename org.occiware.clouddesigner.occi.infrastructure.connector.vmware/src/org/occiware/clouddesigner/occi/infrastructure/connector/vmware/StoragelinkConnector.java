@@ -17,7 +17,14 @@ package org.occiware.clouddesigner.occi.infrastructure.connector.vmware;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.vmware.vim25.mo.Datacenter;
+import com.vmware.vim25.mo.Datastore;
+import com.vmware.vim25.mo.Folder;
+
+import org.eclipse.xtext.xtext.ecoreInference.EClassifierInfo.EClassInfo.FindResult;
 import org.occiware.clouddesigner.occi.infrastructure.StorageLinkStatus;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.DatastoreHelper;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VCenterClient;
 
 /**
  * Connector implementation for the OCCI kind:
@@ -64,8 +71,35 @@ public class StoragelinkConnector extends org.occiware.clouddesigner.occi.infras
 	public void occiRetrieve()
 	{
 		LOGGER.debug("occiRetrieve() called on " + this);
-
-		// TODO: Implement this callback or remove this method.
+		if (!VCenterClient.checkConnection()) {
+			// Must return true if connection is established.
+			return;
+		}
+		Folder rootFolder = VCenterClient.getServiceInstance().getRootFolder();
+		// Find a datastore.
+		String datastoreName = this.getTitle();
+		if (datastoreName == null) {
+			LOGGER.error("The datastore name is null, please set title attribute. Cant retrieve datastore.");
+			this.setState(StorageLinkStatus.ERROR);
+			VCenterClient.disconnect();
+			return;
+		}
+		Datastore datastore = DatastoreHelper.findDatastoreForName(rootFolder, datastoreName);
+		
+		if (datastore == null) {
+			LOGGER.error("The datastore " + datastoreName + " doesnt exist. Check your configuration.");
+			this.setState(StorageLinkStatus.INACTIVE);
+			VCenterClient.disconnect();
+			return;
+		}
+		
+		// Assign value.
+		this.setState(StorageLinkStatus.ACTIVE);
+		
+		
+		VCenterClient.disconnect();
+		
+		
 	}
 
 	/**
