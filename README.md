@@ -14,5 +14,7 @@ Usage with template : set the attribute "summary" with the name of your template
 
 Don't forget to add your credentials in src/resources/credential.properties before using this connector.
 
+Disk usage has been added, you can now create empty disk, create attached disk, attach/detach a disk, delete a disk, resize a disk (only on superior capacity) and rename a disk.
+
 ## Supported version of VMWare vcenter
 The version 6.0, and all older version 5.5, 5.0, 4.1 etc. (ESX and ESXi).
