@@ -1,3 +1,15 @@
+/**
+ * Copyright (c) 2016 Inria
+ *  
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
+ * 
+ * Contributors:
+ * - Christophe Gourdin <christophe.gourdin@inria.fr>
+ *
+ */
 package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons;
 
 import java.io.IOException;
@@ -5,7 +17,11 @@ import java.rmi.RemoteException;
 import java.util.Calendar;
 
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.AttachDiskException;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.DatacenterNotFoundException;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.DatastoreNotFoundException;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.DetachDiskException;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.DatacenterHelper;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.DatastoreHelper;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VCenterClient;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VMHelper;
 import org.slf4j.Logger;
@@ -60,8 +76,8 @@ public class Volume {
 	public static final String CONTROLLER_SCSI = "VirtualSCSIController";
 	public static final String CONTROLLER_SATA = "VirtualSATAController";
 
-	private Datacenter dc;
-	private Datastore ds;
+	private String dcName;
+	private String dsName;
 	private String volumeName;
 	/**
 	 * Linked virtual machine name (null if none).
@@ -114,10 +130,10 @@ public class Volume {
 	 * @param ds
 	 * @param dc
 	 */
-	public Volume(final String volumeName, final Datastore ds, final Datacenter dc, final String vmName) {
+	public Volume(final String volumeName, final String dsName, final String dcName, final String vmName) {
 		this.volumeName = volumeName;
-		this.ds = ds;
-		this.dc = dc;
+		this.dsName = dsName;
+		this.dcName = dcName;
 		this.vmName = vmName;
 	}
 
@@ -126,15 +142,28 @@ public class Volume {
 	 * volume doesnt exist anymore.
 	 */
 	public void loadVolume() {
-		
-		if (ds == null) {
+
+		if (dsName == null) {
 			LOGGER.error("Cant load the disk information without datastore reference.");
 			return;
 		}
-		
+		if (dcName == null) {
+			LOGGER.error("Cant load the disk information without datacenter reference");
+			return;
+		}
+		// Load datastore info.
+		Datastore ds;
+		try {
+			ds = loadDatastore();
+		} catch (DatastoreNotFoundException ex) {
+			LOGGER.error(ex.getMessage());
+			exist = false;
+			return;
+		}
+
 		if (fullPath == null) {
 			// Load the fullPath and check if it exist.
-			fullPath = findVolumeVMDKPathForName();
+			fullPath = findVolumeVMDKPathForName(ds);
 		}
 		if (fullPath == null) {
 			LOGGER.warn("No vmware path found on this volume, cant load the volume informations.");
@@ -169,7 +198,6 @@ public class Volume {
 			if (attached) {
 				volumeState = "attached";
 			}
-			
 
 		} else {
 			// Disk is not attached to a vm.
@@ -180,7 +208,7 @@ public class Volume {
 			// The disk size has been set on findVolumeVMDKPathForName...
 			volumeState = "detached";
 		}
-
+		
 	}
 
 	/**
@@ -233,14 +261,25 @@ public class Volume {
 	 * with the given path.
 	 */
 	public void createEmptyVolume() {
-		fullPath = findVolumeVMDKPathForName();
+		Datacenter dc;
+		Datastore ds;
+		try {
+			ds = loadDatastore();
+			dc = loadDatacenter();
+		} catch (DatacenterNotFoundException | DatastoreNotFoundException ex) {
+			LOGGER.error(ex.getMessage());
+			return;
+		}
+		if (fullPath == null) {
+			fullPath = findVolumeVMDKPathForName(ds);
+		}
 
 		// Check if this volume already exist in the datastore.
 		if (fullPath == null) {
 			// The volume doesnt exist, we create it in a temporary directory.
 			try {
 				mkdir(dc, ds, "/tmp");
-				fullPath = "[" + ds.getName() + "] " + "tmp" + "/" + volumeName + ".vmdk";
+				fullPath = "[" + dsName + "] " + "tmp" + "/" + volumeName + ".vmdk";
 			} catch (IOException ex) {
 				LOGGER.error("Error IO : " + ex.getMessage());
 				ex.printStackTrace();
@@ -252,7 +291,8 @@ public class Volume {
 			return;
 		}
 		if (size.longValue() <= 0L) {
-			LOGGER.error("Cant create the disk, the size is not setted correctly, size must be superior or equal to 1 GB");
+			LOGGER.error(
+					"Cant create the disk, the size is not setted correctly, size must be superior or equal to 1 GB");
 			return;
 		}
 
@@ -278,12 +318,14 @@ public class Volume {
 				mainVolume = false;
 				exist = true;
 				volumeState = "undefined";
+				LOGGER.info("The disk : " + volumeName + " has been created (empty volume).");
 			}
 
 		} catch (RemoteException | InterruptedException ex) {
 			LOGGER.error("Error while creating an empty detached disk : " + volumeName, ex);
 			return;
 		}
+		
 	}
 
 	/**
@@ -294,6 +336,23 @@ public class Volume {
 	public void createAttachedVolume() {
 		VirtualDisk disk = null;
 		VirtualSCSIController scsiController;
+
+		Datastore ds;
+		try {
+			ds = loadDatastore();
+		} catch (DatastoreNotFoundException ex) {
+			LOGGER.error(ex.getMessage());
+			return;
+		}
+		if (dsName == null) {
+			LOGGER.error("Cant load the disk information without datastore reference.");
+			return;
+		}
+		if (dcName == null) {
+			LOGGER.error("Cant load the disk information without datacenter reference");
+			return;
+		}
+
 		if (volumeName == null) {
 			LOGGER.error(
 					"The disk name is not setted, please defined it on title attribute, cant create an attached disk.");
@@ -318,18 +377,17 @@ public class Volume {
 					+ " , cant create the attached disk.");
 			return;
 		}
-		
+
 		// Define the full filename path.
-		fullPath = "[" + ds.getName() + "] " + vm.getName() + "/" + volumeName + ".vmdk";
-		
+		fullPath = "[" + dsName + "] " + vm.getName() + "/" + volumeName + ".vmdk";
+
 		// Check if the disk already exist on this path.
 		if (exists(fullPath, ds)) {
 			LOGGER.warn("The disk " + volumeName + " already exist, cant create.");
 			exist = true;
 			return;
 		}
-		
-		
+
 		VirtualDisk mainDisk = findVirtualDiskForScsiId(vm, 0);
 		VirtualDiskFlatVer2BackingInfo vdMainBackingInfo = (VirtualDiskFlatVer2BackingInfo) mainDisk.getBacking();
 		disk = new VirtualDisk();
@@ -421,25 +479,28 @@ public class Volume {
 	 */
 	public boolean destroyVolume() {
 		boolean result = false;
-		FileManager fileManager = VCenterClient.getServiceInstance().getFileManager();
 
-		if (ds == null) {
-			LOGGER.error("Cant destroy the disk, cant find the datastore !");
+		Datacenter dc;
+		Datastore ds;
+		try {
+			ds = loadDatastore();
+			dc = loadDatacenter();
+		} catch (DatacenterNotFoundException | DatastoreNotFoundException ex) {
+			LOGGER.error(ex.getMessage());
 			return result;
 		}
+
+		FileManager fileManager = VCenterClient.getServiceInstance().getFileManager();
 
 		if (fileManager == null) {
 			LOGGER.error("File manager is not supported or you have not the rights to use it, cant destroy the disk "
 					+ volumeName);
 			return result;
 		}
-
-		if (ds == null) {
-			LOGGER.error("The datastore is not setted, cant destroy the disk " + volumeName);
-			return result;
+		if (fullPath == null) {
+			fullPath = findVolumeVMDKPathForName(ds);
 		}
-		
-		fullPath = findVolumeVMDKPathForName();
+
 		if (fullPath == null) {
 			LOGGER.error("The disk path on vcenter is not found, cant destroy the disk " + volumeName);
 			return result;
@@ -488,7 +549,9 @@ public class Volume {
 			LOGGER.error("Error while destroying a disk : " + volumeName, e);
 			return result;
 		}
-
+		if (result) {
+			LOGGER.info("The disk : " + volumeName + " has been destroyed.");
+		}
 		return result;
 
 	}
@@ -503,20 +566,28 @@ public class Volume {
 	public boolean attachVolume() throws AttachDiskException {
 		boolean result = false;
 
+		Datastore ds;
+		try {
+			ds = loadDatastore();
+		} catch (DatastoreNotFoundException ex) {
+			LOGGER.error(ex.getMessage());
+			return result;
+		}
+
 		if (vmName == null) {
 			throw new AttachDiskException("No virtual machine name is given for the attachment. Cant attach the disk.");
 		}
+		
+		if (fullPath == null) {
+			fullPath = findVolumeVMDKPathForName(ds);
+		}
+		
 		loadVirtualDisk();
 		if (attached) {
 			LOGGER.info("The disk : " + volumeName + " is already attached on the vm : " + vmName);
 			return true;
 		}
 
-		if (ds == null) {
-			LOGGER.error("The datastore is not setted, cant attach the disk " + volumeName + " on the vm: " + vmName);
-			return result;
-		}
-		fullPath = findVolumeVMDKPathForName();
 		if (fullPath == null) {
 			exist = false;
 			// Create the disk
@@ -533,47 +604,43 @@ public class Volume {
 						+ volumeName + " on the vm: " + vmName);
 			}
 
-			// Create a new virtual disk object.
-			vdisk = new VirtualDisk();
-			vdisk.setUnitNumber(this.getFreeUnitNumber(vm));
-			vdisk.setControllerKey(this.getSCSIController(vm).getControllerKey());
-			// VirtualDiskFlatVer2BackingInfo
-			VirtualDiskFlatVer2BackingInfo backingInfo = new VirtualDiskFlatVer2BackingInfo();
-			backingInfo.setFileName(fullPath);
-			backingInfo.setDiskMode("persistent");
-			backingInfo.setSplit(false);
-			backingInfo.setEagerlyScrub(false);
-			backingInfo.setThinProvisioned(true);
-			backingInfo.setWriteThrough(false);
-			vdisk.setBacking(backingInfo);
-			// VirtualDeviceConnectInfo
-			VirtualDeviceConnectInfo connectInfo = new VirtualDeviceConnectInfo();
-			connectInfo.setAllowGuestControl(false);
-			connectInfo.setStartConnected(true);
-			connectInfo.setConnected(true);
-			vdisk.setConnectable(connectInfo);
-
-			VirtualDeviceConfigSpec diskSpec = new VirtualDeviceConfigSpec();
-			diskSpec.setOperation(VirtualDeviceConfigSpecOperation.add);
-			diskSpec.setFileOperation(VirtualDeviceConfigSpecFileOperation.create);
-
-			diskSpec.setDevice(vdisk);
-			VirtualMachineConfigSpec configSpec = new VirtualMachineConfigSpec();
-			configSpec.setDeviceChange(new VirtualDeviceConfigSpec[] { diskSpec });
+			VirtualMachineConfigSpec vmConfigSpec = new VirtualMachineConfigSpec(); 
+			  
+		    VirtualDeviceConfigSpec diskSpec = new VirtualDeviceConfigSpec(); 
+		    VirtualDeviceConfigSpec[] vdiskSpecArray = {diskSpec}; 
+		    vmConfigSpec.setDeviceChange(vdiskSpecArray); 
+		      
+		    VirtualDiskFlatVer2BackingInfo diskfileBacking = new VirtualDiskFlatVer2BackingInfo(); 
+		    diskfileBacking.setFileName(fullPath); 
+		    diskfileBacking.setDiskMode("persistent"); 
+		  
+		      
+		    VirtualSCSIController scsiController = getSCSIController(vm); 
+		    int unitNumber = getFreeUnitNumber(vm); 
+		  
+		    VirtualDisk disk = new VirtualDisk(); 
+		    disk.setControllerKey(scsiController.getKey()); 
+		    disk.setUnitNumber(unitNumber); 
+		    disk.setBacking(diskfileBacking); 
+		    //Unlike required by API ref, the capacityKB is optional. So skip setCapacityInKB() method. 
+		    disk.setKey(-100); 
+		  
+		    diskSpec.setOperation(VirtualDeviceConfigSpecOperation.add);            
+		    diskSpec.setDevice(disk); 
 
 			// Launch the service task.
 			Task task;
 			try {
-				task = vm.reconfigVM_Task(configSpec);
+				task = vm.reconfigVM_Task(vmConfigSpec);
 				task.waitForTask();
 				TaskInfo taskInfo = task.getTaskInfo();
 				if (taskInfo.getState() != TaskInfoState.success) {
 					MethodFault fault = taskInfo.getError().getFault();
 					LOGGER.error("Error while attaching a disk : " + volumeName, fault.detail);
-					LOGGER.error("Fault message: " + fault.getMessage());
+					LOGGER.error("Fault message: " + fault.getMessage() + " --< " + fault.getClass().getName());
 
 				} else {
-					LOGGER.info("The disk " + volumeName + " has been created and attached.");
+					LOGGER.info("The disk " + volumeName + " is attached.");
 					result = true;
 					attached = true;
 					exist = true;
@@ -596,7 +663,9 @@ public class Volume {
 	public boolean detachVolume() throws DetachDiskException {
 		boolean result = false;
 
-		if (!attached) { // TODO : Verify state on vcenter.
+		loadVirtualDisk();
+
+		if (!attached) {
 			return true; // Already detached.
 		}
 		// VirtualMachine
@@ -629,11 +698,11 @@ public class Volume {
 			TaskInfo taskInfo = task.getTaskInfo();
 			if (taskInfo.getState() != TaskInfoState.success) {
 				MethodFault fault = taskInfo.getError().getFault();
-				LOGGER.error("Error while destroying a disk : " + volumeName, fault.detail);
+				LOGGER.error("Error while detaching a disk : " + volumeName, fault.detail);
 				LOGGER.error("Fault message: " + fault.getMessage());
 
 			} else {
-				LOGGER.info("The disk " + volumeName + " has been destroyed.");
+				LOGGER.info("The disk " + volumeName + " has been detached.");
 				result = true;
 			}
 		} catch (RemoteException | InterruptedException e) {
@@ -649,7 +718,7 @@ public class Volume {
 	 * Migrate a volume from one datastore to another.
 	 */
 	public void MigrateVolumeOnAnotherDatastore() {
-		// TODO : migrate a volume from origin ds to destination ds.
+		// TODO : migrate a volume from origin ds to destination ds. in V2.
 	}
 
 	/**
@@ -657,6 +726,7 @@ public class Volume {
 	 */
 	public void MigrateVolumeInstanceToAnother() {
 		// TODO : migrate a volume from origin instance to destination instance.
+		// in V2.
 	}
 
 	/**
@@ -669,15 +739,21 @@ public class Volume {
 	public boolean resize(Float newSize) {
 		boolean result = false;
 
-		Long sizeKB = newSize.longValue() * 1024 * 1024;
-		LOGGER.info("Resizing volume " + volumeName + " to " + sizeKB);
-		if (dc == null) {
-			LOGGER.error("Cant resize the disk, dont know the datacenter.");
+		Datacenter dc;
+		Datastore ds;
+		try {
+			ds = loadDatastore();
+			dc = loadDatacenter();
+		} catch (DatacenterNotFoundException | DatastoreNotFoundException ex) {
+			LOGGER.error(ex.getMessage());
 			return result;
 		}
 
+		Long sizeKB = newSize.longValue() * 1024 * 1024;
+		LOGGER.info("Resizing volume " + volumeName + " to " + sizeKB);
+
 		if (fullPath == null) {
-			fullPath = findVolumeVMDKPathForName();
+			fullPath = findVolumeVMDKPathForName(ds);
 			if (fullPath == null) {
 				LOGGER.error("No vmware path found on this volume, cant resize the volume");
 				return result;
@@ -706,13 +782,14 @@ public class Volume {
 
 					MethodFault fault = taskInfo.getError().getFault();
 					LOGGER.error("Error while resizing a disk : " + volumeName, fault.detail);
-					LOGGER.error("Fault message: " + fault.getMessage());
+					LOGGER.error("Fault message: " + fault.getMessage() + " --< " + fault.getClass().getName());
 				} else {
 					size = newSize;
 					result = true;
 				}
 			} catch (RemoteException e) {
 				LOGGER.error("Error while resizing a disk : " + volumeName, e);
+
 			}
 		} else {
 			// Cant use virtualDisk manager.
@@ -745,7 +822,7 @@ public class Volume {
 
 						MethodFault fault = taskInfo.getError().getFault();
 						LOGGER.error("Error while resizing a disk : " + volumeName, fault.detail);
-						LOGGER.error("Fault message: " + fault.getMessage());
+						LOGGER.error("Fault message: " + fault.getMessage() + " --< " + fault.getClass().getName());
 					} else {
 						size = newSize;
 						result = true;
@@ -761,6 +838,9 @@ public class Volume {
 			}
 
 		}
+		if (result) {
+			LOGGER.info("The disk : " + volumeName + " has been resized to : " + size);
+		}
 		return result;
 
 	}
@@ -773,6 +853,15 @@ public class Volume {
 	 */
 	public boolean renameDisk(final String newVolumeName) {
 		boolean result = false;
+		Datacenter dc;
+		Datastore ds;
+		try {
+			ds = loadDatastore();
+			dc = loadDatacenter();
+		} catch (DatacenterNotFoundException | DatastoreNotFoundException ex) {
+			LOGGER.error(ex.getMessage());
+			return result;
+		}
 		// Check if we must power off the vm, only if the disk is attached..
 		if (isAttached()) {
 			// Load the vm.
@@ -790,8 +879,8 @@ public class Volume {
 
 		} // end if isAttached.
 
-		String newPath = "[" + ds.getName() + "] " + vmName + "/" + newVolumeName + ".vmdk"; 
-		
+		String newPath = "[" + dsName + "] " + vmName + "/" + newVolumeName + ".vmdk";
+
 		LOGGER.debug("Moving disk vmdk : " + fullPath + " --< to: " + newPath);
 		Task task;
 		try {
@@ -817,29 +906,37 @@ public class Volume {
 			}
 		} catch (RemoteException e) {
 			LOGGER.error("Error while renaming a disk : " + volumeName, e);
-			LOGGER.error("Message: "+ e.getMessage());
+			LOGGER.error("Message: " + e.getMessage());
 		}
-
+		if (result) {
+			LOGGER.info("The disk : " + volumeName + " has been renamed.");
+		}
 		return result;
 	}
-	
+
 	/**
 	 * Get the uuid of this disk (vmware value).
+	 * 
 	 * @return
 	 */
 	public String getUUID() {
 		String uuid = "unknwown";
+		Datacenter dc;
+		try {
+			dc = loadDatacenter();
+		} catch (DatacenterNotFoundException ex) {
+			LOGGER.error(ex.getMessage());
+			return null;
+		}
 		VirtualDiskManager virtDiskMgr = VCenterClient.getServiceInstance().getVirtualDiskManager();
 		try {
 			uuid = virtDiskMgr.queryVirtualDiskUuid(fullPath, dc);
 		} catch (RemoteException ex) {
 			LOGGER.error("Remote error : " + ex.getMessage());
 		}
-		
+
 		return uuid;
 	}
-	
-	
 
 	// Utility methods.
 
@@ -869,7 +966,7 @@ public class Volume {
 			fileManager.makeDirectory(destFolder, dc, true);
 			return true;
 		}
-		LOGGER.info("Directory : " + destFolder + " could not be created because it already exists");
+		LOGGER.warn("Directory : " + destFolder + " could not be created because it already exists");
 		return false;
 	}
 
@@ -882,9 +979,9 @@ public class Volume {
 	 * @return the full path like "[datastore1] /datavm1/data1.vmdk", may return
 	 *         null if no volume is found.
 	 */
-	private String findVolumeVMDKPathForName() {
+	private String findVolumeVMDKPathForName(Datastore ds) {
 		String fullPath = null;
-		String dsName = ds.getName();
+
 		String basePath = null;
 
 		VmDiskFileQueryFilter vdiskFilter = new VmDiskFileQueryFilter();
@@ -934,7 +1031,8 @@ public class Volume {
 				for (FileInfo fileInfo : fileArray) {
 					fullPath = basePath + fileInfo.getPath();
 					// Real size on datastore.
-					size = fileInfo.getFileSize().floatValue() / (1024 * 1024 * 1024); // File info is in bytes not kilo !!!
+					// File info is in bytes not kilo !!!
+					size = fileInfo.getFileSize().floatValue() / (1024 * 1024 * 1024); 
 					modifiedDate = fileInfo.getModification();
 					break;
 				}
@@ -1066,6 +1164,47 @@ public class Volume {
 		return scsiId;
 	}
 
+	/**
+	 * Load a datastore from rootFolder.
+	 * 
+	 * @return a datastore object, if not found a
+	 *         {@link DatastoreNotFoundException} is thrown.
+	 * @throws DatastoreNotFoundException
+	 */
+	private Datastore loadDatastore() throws DatastoreNotFoundException {
+		if (dsName == null) {
+			throw new DatastoreNotFoundException("Datastore name is not set, cant locate a datastore by its name.");
+		}
+		Folder rootFolder = VCenterClient.getServiceInstance().getRootFolder();
+		Datastore ds = DatastoreHelper.findDatastoreForName(rootFolder, dsName);
+		if (ds == null) {
+			throw new DatastoreNotFoundException();
+		}
+		return ds;
+	}
+
+	/**
+	 * Load a datacenter object from rootFolder and datastore name.
+	 * 
+	 * @return a datacenter object, if not found a
+	 *         {@link DatacenterNotFoundException} is thrown (or if datastore
+	 *         name is null).
+	 * @throws DatacenterNotFoundException
+	 */
+	private Datacenter loadDatacenter() throws DatacenterNotFoundException {
+		if (dsName == null) {
+			throw new DatacenterNotFoundException(
+					"Datastore name is not set, cant locate datacenter from datastore name.");
+		}
+		Folder rootFolder = VCenterClient.getServiceInstance().getRootFolder();
+		Datacenter dc = DatacenterHelper.findDatacenterFromDatastore(rootFolder, dsName);
+		if (dc == null) {
+			throw new DatacenterNotFoundException("Cant locate datacenter from datastore name: " + dsName);
+		}
+
+		return dc;
+	}
+
 	// Getters and setters.
 
 	public String getVolumeName() {
@@ -1147,4 +1286,5 @@ public class Volume {
 	public void setModifiedDate(Calendar modifiedDate) {
 		this.modifiedDate = modifiedDate;
 	}
+
 }

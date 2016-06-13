@@ -123,6 +123,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 			if (datastore != null && datacenter == null && vmName == null) {
 				datacenter = DatacenterHelper.findDatacenterFromDatastore(rootFolder, datastore.getName());
 				this.setDatacenterName(datacenter.getName());
+				this.setDatastoreName(datastore.getName());
 			}
 
 			if (datastore == null) {
@@ -139,10 +140,10 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 
 		// Load the volume information. If the volume doesnt exist, the volume
 		// object will be null.
-		VolumeHelper.loadVolumeInformation(datastore, volumeName, datacenter, vmName);
+		VolumeHelper.loadVolumeInformation(datastoreName, volumeName, datacenterName, vmName);
 
 		// Check if the volume already exist in the vcenter.
-		if (VolumeHelper.isExistVolumeForName(datastore, volumeName, datacenter, vmName)) {
+		if (VolumeHelper.isExistVolumeForName(datastoreName, volumeName, datacenterName, vmName)) {
 			// The volume already exist.
 			LOGGER.warn("Volume : " + volumeName + " already exist in datacenter.");
 			VCenterClient.disconnect();
@@ -157,7 +158,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		VolumeHelper.setSize(volumeName, this.getSize());
 
 		// Create a new disk with or with or without vm information.
-		VolumeHelper.createVolume(datacenter, datastore, volumeName, this.getSize());
+		VolumeHelper.createVolume(datacenterName, datastoreName, volumeName, this.getSize());
 		occiRetrieve();
 		// In all case invoke a disconnect from vcenter.
 		VCenterClient.disconnect();
@@ -189,6 +190,8 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 				this.setMessage("Cant locate a datastore for this storage disk.");
 				VCenterClient.disconnect();
 				return;
+			} else {
+				this.setDatastoreName(datastore.getName());
 			}
 			if (datacenter == null) {
 				LOGGER.error("Cant locate a datacenter for this storage disk.");
@@ -196,6 +199,8 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 				this.setMessage("Cant locate a datacenter for this storage disk.");
 				VCenterClient.disconnect();
 				return;
+			} else {
+				this.setDatacenterName(datacenter.getName());
 			}
 		}
 
@@ -203,24 +208,24 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		// loadinfo method may not work.
 		if (!oldDiskName.equals(volumeName)) {
 			// Volume name has changed.
-			if (VolumeHelper.isExistVolumeForName(datastore, volumeName, datacenter, vmName)) {
+			if (VolumeHelper.isExistVolumeForName(datastoreName, volumeName, datacenterName, vmName)) {
 				// All ok.
 				oldDiskName = volumeName;
 				LOGGER.info("The disk " + oldDiskName + " name has changed to : " + volumeName);
 
-			} else if (VolumeHelper.isExistVolumeForName(datastore, oldDiskName, datacenter, vmName)) {
+			} else if (VolumeHelper.isExistVolumeForName(datastoreName, oldDiskName, datacenterName, vmName)) {
 				volumeName = oldDiskName;
 				this.setTitle(oldDiskName);
 			}
 		} else {
 			// Load the volume object.
-			VolumeHelper.loadVolumeInformation(datastore, volumeName, datacenter, vmName);
+			VolumeHelper.loadVolumeInformation(datastoreName, volumeName, datacenterName, vmName);
 		}
 
 		// Update disk information on screen.
 		try {
 			this.setMessage(null);
-			if (!VolumeHelper.isExistVolumeForName(datastore, volumeName, datacenter, vmName)) {
+			if (!VolumeHelper.isExistVolumeForName(datastoreName, volumeName, datacenterName, vmName)) {
 				LOGGER.error("Cant find the disk on vcenter, there's no disk with the name : " + volumeName);
 				this.setState(StorageStatus.ERROR);
 				this.setMessage("Cant find the disk on vcenter, there's no disk with the name : " + volumeName);
@@ -236,7 +241,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 					this.setState(StorageStatus.OFFLINE);
 				}
 				assignDeviceIdStorageToStorageLink(volumeName);
-				
+
 			}
 		} catch (DiskNotFoundException ex) {
 			LOGGER.error(ex.getMessage());
@@ -301,7 +306,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 					oldDiskName = volumeName;
 					occiRetrieve();
 				}
-				
+
 			} catch (DiskNotFoundException ex) {
 				this.setMessage(ex.getMessage());
 			}
@@ -342,14 +347,14 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 			}
 		}
 		try {
-			VolumeHelper.destroyDisk(volumeName, datacenter, datastore, vmName);
+			VolumeHelper.destroyDisk(volumeName, datacenterName, datastoreName, vmName);
 			this.setState(StorageStatus.OFFLINE);
 			this.setMessage("The disk " + volumeName + " has been deleted.");
 		} catch (DetachDiskException ex) {
 			this.setMessage(ex.getMessage());
 			this.setState(StorageStatus.ERROR);
 		}
-		
+
 		// In all case invoke a disconnect from vcenter.
 		VCenterClient.disconnect();
 	}
@@ -386,60 +391,60 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 			}
 		}
 		try {
-		// Storage State Machine.
-		switch (getState().getValue()) {
+			// Storage State Machine.
+			switch (getState().getValue()) {
 
-		case StorageStatus.ONLINE_VALUE:
-			LOGGER.debug("Fire transition(state=online, action=\"online\")...");
-			this.setState(StorageStatus.OFFLINE);
-			VolumeHelper.detachDisk(volumeName);
-			VolumeHelper.attachDisk(volumeName, vmName);
-			try {
-				if (VolumeHelper.isAttached(volumeName)) {
-					this.setState(StorageStatus.ONLINE);
+			case StorageStatus.ONLINE_VALUE:
+				LOGGER.debug("Fire transition(state=online, action=\"online\")...");
+				this.setState(StorageStatus.OFFLINE);
+				VolumeHelper.detachDisk(volumeName);
+				VolumeHelper.attachDisk(volumeName, vmName);
+				try {
+					if (VolumeHelper.isAttached(volumeName)) {
+						this.setState(StorageStatus.ONLINE);
+					}
+				} catch (DiskNotFoundException e) {
+					LOGGER.error(e.getMessage());
+					this.setMessage(e.getMessage());
+					this.setState(StorageStatus.ERROR);
 				}
-			} catch (DiskNotFoundException e) {
-				LOGGER.error(e.getMessage());
-				this.setMessage(e.getMessage());
-				this.setState(StorageStatus.ERROR);
-			}
-			break;
+				break;
 
-		case StorageStatus.OFFLINE_VALUE:
-			LOGGER.debug("Fire transition(state=offline, action=\"online\")...");
-			VolumeHelper.attachDisk(volumeName, vmName);
-			try {
-				if (VolumeHelper.isAttached(volumeName)) {
-					this.setState(StorageStatus.ONLINE);
+			case StorageStatus.OFFLINE_VALUE:
+				LOGGER.debug("Fire transition(state=offline, action=\"online\")...");
+				VolumeHelper.attachDisk(volumeName, vmName);
+				try {
+					if (VolumeHelper.isAttached(volumeName)) {
+						this.setState(StorageStatus.ONLINE);
+					}
+				} catch (DiskNotFoundException e) {
+					LOGGER.error(e.getMessage());
+					this.setMessage(e.getMessage());
+					this.setState(StorageStatus.ERROR);
 				}
-			} catch (DiskNotFoundException e) {
-				LOGGER.error(e.getMessage());
-				this.setMessage(e.getMessage());
-				this.setState(StorageStatus.ERROR);
-			}
 
-			break;
+				break;
 
-		case StorageStatus.ERROR_VALUE:
-			LOGGER.debug("Fire transition(state=error, action=\"online\")...");
-			this.setState(StorageStatus.OFFLINE);
-			VolumeHelper.detachDisk(volumeName);
-			VolumeHelper.attachDisk(volumeName, vmName);
-			try {
-				if (VolumeHelper.isAttached(volumeName)) {
-					this.setState(StorageStatus.ONLINE);
+			case StorageStatus.ERROR_VALUE:
+				LOGGER.debug("Fire transition(state=error, action=\"online\")...");
+				this.setState(StorageStatus.OFFLINE);
+				VolumeHelper.detachDisk(volumeName);
+				VolumeHelper.attachDisk(volumeName, vmName);
+				try {
+					if (VolumeHelper.isAttached(volumeName)) {
+						this.setState(StorageStatus.ONLINE);
+					}
+				} catch (DiskNotFoundException e) {
+					LOGGER.error(e.getMessage());
+					this.setMessage(e.getMessage());
+					this.setState(StorageStatus.ERROR);
 				}
-			} catch (DiskNotFoundException e) {
-				LOGGER.error(e.getMessage());
-				this.setMessage(e.getMessage());
-				this.setState(StorageStatus.ERROR);
+
+				break;
+
+			default:
+				break;
 			}
-
-			break;
-
-		default:
-			break;
-		}
 		} catch (AttachDiskException | DetachDiskException ex) {
 			this.setMessage(ex.getMessage());
 			this.setState(StorageStatus.ERROR);
@@ -477,64 +482,62 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 			}
 		}
 		try {
-		// Storage State Machine.
-		switch (getState().getValue()) {
+			// Storage State Machine.
+			switch (getState().getValue()) {
 
-		case StorageStatus.ONLINE_VALUE:
-			LOGGER.debug("Fire transition(state=online, action=\"offline\")...");
-			
-			VolumeHelper.detachDisk(volumeName);
-			try {
-				if (!VolumeHelper.isAttached(volumeName)) {
-					this.setState(StorageStatus.OFFLINE);
+			case StorageStatus.ONLINE_VALUE:
+				LOGGER.debug("Fire transition(state=online, action=\"offline\")...");
+
+				VolumeHelper.detachDisk(volumeName);
+				try {
+					if (!VolumeHelper.isAttached(volumeName)) {
+						this.setState(StorageStatus.OFFLINE);
+					}
+				} catch (DiskNotFoundException e) {
+					LOGGER.error(e.getMessage());
+					this.setMessage(e.getMessage());
+					this.setState(StorageStatus.ERROR);
 				}
-			} catch (DiskNotFoundException e) {
-				LOGGER.error(e.getMessage());
-				this.setMessage(e.getMessage());
-				this.setState(StorageStatus.ERROR);
-			}
-			
-			
-			break;
 
-		case StorageStatus.OFFLINE_VALUE:
-			LOGGER.debug("Fire transition(state=offline, action=\"offline\")...");
-			VolumeHelper.detachDisk(volumeName);
-			try {
-				if (VolumeHelper.isAttached(volumeName)) {
-					this.setState(StorageStatus.ONLINE);
-				} else {
-					this.setState(StorageStatus.OFFLINE);
+				break;
+
+			case StorageStatus.OFFLINE_VALUE:
+				LOGGER.debug("Fire transition(state=offline, action=\"offline\")...");
+				VolumeHelper.detachDisk(volumeName);
+				try {
+					if (VolumeHelper.isAttached(volumeName)) {
+						this.setState(StorageStatus.ONLINE);
+					} else {
+						this.setState(StorageStatus.OFFLINE);
+					}
+				} catch (DiskNotFoundException e) {
+					LOGGER.error(e.getMessage());
+					this.setMessage(e.getMessage());
+					this.setState(StorageStatus.ERROR);
 				}
-			} catch (DiskNotFoundException e) {
-				LOGGER.error(e.getMessage());
-				this.setMessage(e.getMessage());
-				this.setState(StorageStatus.ERROR);
-			}
-			
-			break;
 
-		case StorageStatus.ERROR_VALUE:
-			LOGGER.debug("Fire transition(state=error, action=\"offline\")...");
-			VolumeHelper.detachDisk(volumeName);
-			try {
-				if (VolumeHelper.isAttached(volumeName)) {
-					this.setState(StorageStatus.ONLINE);
-				} else {
-					this.setState(StorageStatus.OFFLINE);
+				break;
+
+			case StorageStatus.ERROR_VALUE:
+				LOGGER.debug("Fire transition(state=error, action=\"offline\")...");
+				VolumeHelper.detachDisk(volumeName);
+				try {
+					if (VolumeHelper.isAttached(volumeName)) {
+						this.setState(StorageStatus.ONLINE);
+					} else {
+						this.setState(StorageStatus.OFFLINE);
+					}
+				} catch (DiskNotFoundException e) {
+					LOGGER.error(e.getMessage());
+					this.setMessage(e.getMessage());
+					this.setState(StorageStatus.ERROR);
 				}
-			} catch (DiskNotFoundException e) {
-				LOGGER.error(e.getMessage());
-				this.setMessage(e.getMessage());
-				this.setState(StorageStatus.ERROR);
+
+				break;
+
+			default:
+				break;
 			}
-			
-
-			break;
-
-		default:
-			break;
-		}
 		} catch (DetachDiskException ex) {
 			this.setMessage(ex.getMessage());
 			this.setState(StorageStatus.ERROR);
@@ -554,12 +557,11 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 				linkst.setDeviceid(VolumeHelper.getDiskUUID(volumeName));
 			}
 		}
-		
+
 	}
-	
-	
+
 	// Getters and setters and private methods.
-	
+
 	/**
 	 * Usage with Mixin in future.
 	 * 
@@ -697,6 +699,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 						"Cannot retrieve datacenter, cause: datacenter not found for the datastore: "
 								+ datastore.getName());
 			}
+			
 			if (datastore == null) {
 				throw new DatastoreNotFoundException(
 						"Cant locate a datastore, cause: datastore is referenced but not found on vcenter, name of the datastore: "
@@ -716,8 +719,13 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 				}
 			}
 		}
+		if (datacenter != null) {
+			this.setDatacenterName(datacenter.getName());
+		}
+		if (datastore != null) {
+			this.setDatastoreName(datastore.getName());
+		}
+		
 	}
-	
-	
 
 }

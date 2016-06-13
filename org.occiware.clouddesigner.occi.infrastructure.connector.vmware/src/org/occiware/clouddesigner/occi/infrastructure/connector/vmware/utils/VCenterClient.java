@@ -19,6 +19,10 @@ import java.net.URL;
 import java.rmi.RemoteException;
 import java.util.Properties;
 
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.StorageConnector;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.vmware.vim25.mo.ServiceInstance;
 
 /**
@@ -32,7 +36,7 @@ public class VCenterClient {
 	private static String url = null;
 	private static String login = null;
 	private static String password = null;
-
+	private static Logger LOGGER = LoggerFactory.getLogger(VCenterClient.class);
 	private static ServiceInstance serviceInstance = null;
 
 	/**
@@ -129,6 +133,7 @@ public class VCenterClient {
 		} else {
 			if (serviceInstance.getAboutInfo().getApiVersion() == null) {
 				// Reconnect...
+				LOGGER.info("Reconnect to vcenter in progress...");
 				serviceInstance.getServerConnection().logout();
 				if (login != null) {
 					initServiceInstance(url, login, password);
@@ -146,8 +151,10 @@ public class VCenterClient {
 	public static void disconnect() {
 
 		if (serviceInstance != null && login != null) {
+			LOGGER.info("Logging out from vcenter in progress...");
 			serviceInstance.getServerConnection().logout();
 			serviceInstance = null;
+			LOGGER.info("Disconnected from vcenter.");
 		}
 	}
 
@@ -171,18 +178,19 @@ public class VCenterClient {
 	 */
 	public static boolean checkConnection() {
 		if (!isConnected()) {
-			System.out.println("Not connected, connection in progress...");
+			LOGGER.info("Not connected, connection in progress...");
 
 			try {
 				init();
 				connect();
+				LOGGER.info("Connected to vcenter.");
 				return true;
 			} catch (IOException ex) {
 				ex.printStackTrace();
 				return false;
 			}
 		} else {
-			System.out.println("Connected to vcenter.");
+			LOGGER.info("Connected to vcenter.");
 			return true;
 		}
 

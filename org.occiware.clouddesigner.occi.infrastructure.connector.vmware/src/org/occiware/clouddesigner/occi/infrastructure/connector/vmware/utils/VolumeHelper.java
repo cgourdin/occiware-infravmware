@@ -1,7 +1,16 @@
+/**
+ * Copyright (c) 2016 Inria
+ *  
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
+ * 
+ * Contributors:
+ * - Christophe Gourdin <christophe.gourdin@inria.fr>
+ *
+ */
 package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils;
-
-import java.io.IOException;
-import java.rmi.RemoteException;
 
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.Volume;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.AttachDiskException;
@@ -9,23 +18,6 @@ import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.ex
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.DiskNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.vmware.vim25.ArrayOfHostDatastoreBrowserSearchResults;
-import com.vmware.vim25.FileInfo;
-import com.vmware.vim25.FileQuery;
-import com.vmware.vim25.FileQueryFlags;
-import com.vmware.vim25.HostDatastoreBrowserSearchResults;
-import com.vmware.vim25.HostDatastoreBrowserSearchSpec;
-import com.vmware.vim25.HostDiskDimensionsChs;
-import com.vmware.vim25.TaskInfo;
-import com.vmware.vim25.VmDiskFileQuery;
-import com.vmware.vim25.VmDiskFileQueryFilter;
-import com.vmware.vim25.mo.Datacenter;
-import com.vmware.vim25.mo.Datastore;
-import com.vmware.vim25.mo.FileManager;
-import com.vmware.vim25.mo.HostDatastoreBrowser;
-import com.vmware.vim25.mo.Task;
-import com.vmware.vim25.mo.VirtualDiskManager;
 
 public class VolumeHelper {
 	
@@ -35,31 +27,31 @@ public class VolumeHelper {
 	
 	/**
 	 * Load or refresh volume information from vcenter.
-	 * @param ds
+	 * @param dsName
 	 * @param volumeName
-	 * @param dc
+	 * @param dcName
 	 * @param vmName (may be null if volume is not attached.)
 	 */
-	public static void loadVolumeInformation(Datastore ds, String volumeName, Datacenter dc, String vmName) {
+	public static void loadVolumeInformation(String dsName, String volumeName, String dcName, String vmName) {
 		// Load a volume.
-		volume = new Volume(volumeName, ds, dc, vmName);
+		volume = new Volume(volumeName, dsName, dcName, vmName);
 		volume.loadVolume();
 		
 	}
 	
 	/**
 	 * Is the volume exist on vcenter ?
-	 * @param ds
+	 * @param dsName
 	 * @param volumeName
-	 * @param dc
+	 * @param dcName
 	 * @param vmName (may be null if volume is not attached).
 	 * @return true if volume exist, else false.
 	 */
-	public static boolean isExistVolumeForName(Datastore ds, String volumeName, Datacenter dc, String vmName) {
+	public static boolean isExistVolumeForName(String dsName, String volumeName, String dcName, String vmName) {
 		// Search the volume on datastore.
 		if (!checkVolume(volumeName)) {
 			// Load the volume.
-			loadVolumeInformation(ds, volumeName, dc, vmName);
+			loadVolumeInformation(dsName, volumeName, dcName, vmName);
 		}
 		
 		return volume.isExist();
@@ -68,15 +60,15 @@ public class VolumeHelper {
 	
 	/**
 	 * Create an empty disk if no attachment on vm or a virtual disk attached to a vm.
-	 * @param dc (Datacenter)
-	 * @param ds (Datastore)
+	 * @param dcName (Datacenter name)
+	 * @param dsName (Datastore name)
 	 * @param volumeName
 	 * @param volumeSize
 	 */
-	public static void createVolume(final Datacenter dc, final Datastore ds, final String volumeName, final Float volumeSize) {
+	public static void createVolume(final String dcName, final String dsName, final String volumeName, final Float volumeSize) {
 		// build a new disk.
 		if (!checkVolume(volumeName)) {
-			loadVolumeInformation(ds, volumeName, dc, null);
+			loadVolumeInformation(dsName, volumeName, dcName, null);
 		}
 		if (volume.isExist()) {
 			LOGGER.warn("The disk " + volumeName + " already exist, cant create it.");
@@ -196,12 +188,12 @@ public class VolumeHelper {
 	/**
 	 * Destroy definitively a disk from vcenter. If the disk is attached, the disk is detached before.
 	 * @param volumeName
-	 * @param dc
-	 * @param ds
+	 * @param dcName
+	 * @param dsName
 	 * @param vmName
 	 * @throws DetachDiskException 
 	 */
-	public static boolean destroyDisk(final String volumeName, final Datacenter dc, final Datastore ds, final String vmName) throws DetachDiskException {
+	public static boolean destroyDisk(final String volumeName, final String dcName, final String dsName, final String vmName) throws DetachDiskException {
 		boolean result = false;
 		if (checkVolume(volumeName)) {
 			// The volume is loaded
@@ -217,7 +209,7 @@ public class VolumeHelper {
 			result = volume.destroyVolume();
 			
 		} else {
-			if (isExistVolumeForName(ds, volumeName, dc, vmName)) {
+			if (isExistVolumeForName(dsName, volumeName, dcName, vmName)) {
 				// disk is reloaded successfully, destroy the vmdk.
 				result = volume.destroyVolume();
 			}
