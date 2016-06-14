@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.occiware.clouddesigner.occi.infrastructure.NetworkInterfaceStatus;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VCenterClient;
 
 /**
  * Connector implementation for the OCCI kind:
@@ -62,8 +63,19 @@ public class NetworkinterfaceConnector extends org.occiware.clouddesigner.occi.i
 	public void occiRetrieve()
 	{
 		LOGGER.debug("occiRetrieve() called on " + this);
-
-		// TODO: Implement this callback or remove this method.
+		
+		// TODO: Retrieve main network.
+		
+		if (!VCenterClient.checkConnection()) {
+			// Must return true if connection is established.
+			return;
+		}
+		
+		
+		
+		
+		VCenterClient.disconnect();
+		
 	}
 
 	/**
