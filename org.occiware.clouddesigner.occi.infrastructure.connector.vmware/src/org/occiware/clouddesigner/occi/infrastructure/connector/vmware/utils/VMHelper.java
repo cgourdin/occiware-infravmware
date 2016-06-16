@@ -164,35 +164,7 @@ public class VMHelper {
 		return diskSpec;
 	}
 
-	/**
-	 * 
-	 * @param netName
-	 * @param nicName
-	 * @return
-	 * @throws Exception
-	 */
-	public static VirtualDeviceConfigSpec createNicSpec(String netName, String nicName) {
-
-		VirtualDeviceConfigSpec nicSpec = new VirtualDeviceConfigSpec();
-		nicSpec.setOperation(VirtualDeviceConfigSpecOperation.add);
-
-		VirtualEthernetCard nic = new VirtualPCNet32();
-		VirtualEthernetCardNetworkBackingInfo nicBacking = new VirtualEthernetCardNetworkBackingInfo();
-		nicBacking.setDeviceName(netName);
-
-		Description info = new Description();
-		info.setLabel(nicName);
-		info.setSummary(netName);
-		nic.setDeviceInfo(info);
-
-		// type: "generated", "manual", "assigned" by VC
-		nic.setAddressType("generated");
-		nic.setBacking(nicBacking);
-		nic.setKey(0);
-
-		nicSpec.setDevice(nic);
-		return nicSpec;
-	}
+	
 
 	/**
 	 * Set or unset the hotReconfig option. (to reconfig a vm cpu and memory,

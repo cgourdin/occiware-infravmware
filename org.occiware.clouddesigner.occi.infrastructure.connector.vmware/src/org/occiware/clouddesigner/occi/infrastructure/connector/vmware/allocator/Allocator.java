@@ -42,6 +42,9 @@ public interface Allocator {
 
 	public void setDatastore(Datastore datastore);
 
+	public HostSystem getHost();
+	public void setHost(HostSystem host);
+	
 	public ResourcePool getResourcePool();
 
 	public void setResourcePool(ResourcePool resourcePool);

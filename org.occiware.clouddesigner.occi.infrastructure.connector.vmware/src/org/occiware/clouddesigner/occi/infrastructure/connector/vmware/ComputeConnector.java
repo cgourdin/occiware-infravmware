@@ -31,6 +31,7 @@ import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.Clu
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.DatacenterHelper;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.DatastoreHelper;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.HostHelper;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.NetworkHelper;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VCenterClient;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VMHelper;
 import org.occiware.clouddesigner.occi.util.OcciHelper;
@@ -471,7 +472,8 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 					// + upgrade automaticly VMWare Tools via VIJava.
 
 					// Network configuration.
-					VirtualDeviceConfigSpec nicSpec = VMHelper.createNicSpec(netName, nicName);
+					// TODO : Manual configuration mode within mixin ipAddress and ipNetworkInterfaceAddress.
+					VirtualDeviceConfigSpec nicSpec = NetworkHelper.createNicSpec(netName, nicName, NetworkHelper.MODE_NETWORK_ADDRESS_GENERATED, null);
 
 					// if no guest os Id and no template, assume that is an
 					// empty vm

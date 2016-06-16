@@ -196,6 +196,17 @@ public class AllocatorImpl implements Allocator {
 		this.memoryHostMini = memoryHostMini;
 	}
 
+	@Override
+	public HostSystem getHost() {
+		
+		return host;
+	}
+
+	@Override
+	public void setHost(HostSystem host) {
+		this.host = host;
+	}
+
 	
 	
 	

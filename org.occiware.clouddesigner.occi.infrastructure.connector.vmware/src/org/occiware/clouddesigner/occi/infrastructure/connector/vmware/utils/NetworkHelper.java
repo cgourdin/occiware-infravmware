@@ -12,14 +12,19 @@
  */
 package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils;
 
+import java.rmi.RemoteException;
 import java.util.ArrayList;
 import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.vmware.vim25.Description;
 import com.vmware.vim25.VirtualDevice;
 import com.vmware.vim25.VirtualDeviceBackingInfo;
+import com.vmware.vim25.VirtualDeviceConfigSpec;
+import com.vmware.vim25.VirtualDeviceConfigSpecOperation;
+import com.vmware.vim25.VirtualDeviceConnectInfo;
 import com.vmware.vim25.VirtualE1000;
 import com.vmware.vim25.VirtualE1000e;
 import com.vmware.vim25.VirtualEthernetCard;
@@ -30,6 +35,8 @@ import com.vmware.vim25.VirtualPCNet32;
 import com.vmware.vim25.VirtualVmxnet;
 import com.vmware.vim25.VirtualVmxnet2;
 import com.vmware.vim25.VirtualVmxnet3;
+import com.vmware.vim25.mo.HostSystem;
+import com.vmware.vim25.mo.Network;
 import com.vmware.vim25.mo.VirtualMachine;
 
 /**
@@ -47,7 +54,11 @@ public class NetworkHelper {
 	public static final String HOST_SNMP_SYSTEM = "HostSnmpSystem";
 	public static final String HOST_SERVICE_SYSTEM = "HostServiceSystem";
 	public static final String HOST_VMOTION_SYSTEM = "HostVMotionSystem";
-	
+	// "generated", "manual", "assigned"
+	public static final String MODE_NETWORK_ADDRESS_GENERATED = "generated";
+	public static final String MODE_NETWORK_ADDRESS_MANUAL = "manual";
+	public static final String MODE_NETWORK_ADDRESS_ASSIGNED = "assigned";
+		
 	
 	
 	/**
@@ -75,6 +86,45 @@ public class NetworkHelper {
 		
 		return vEths;
 	}
+	/**
+	 * Find a specific virtual ethernet card on vm for the ethernet card name or externalId property.
+	 * @param networkAdapterName
+	 * @param vm
+	 * @return a {@link VirtualEthernetCard} object or null if none is found.
+	 */
+	public static VirtualEthernetCard findVirtualEthernetCardForVM(final String networkAdapterName, final VirtualMachine vm) {
+		VirtualEthernetCard result = null;
+		VirtualEthernetCard vEth = null;
+		String externalId = null;
+		String deviceName = null;
+		if (vm == null) {
+			return result;
+		}
+		VirtualDevice[] vdevices = vm.getConfig().getHardware().getDevice();
+		if (vdevices == null) {
+			return result;
+		}
+		
+		for (VirtualDevice device: vdevices) {
+			if (device instanceof VirtualEthernetCard) {
+				vEth = (VirtualEthernetCard) device;
+				// Get the name.
+				deviceName = vEth.getDeviceInfo().getLabel();
+				externalId = vEth.getExternalId();
+				if (deviceName != null && deviceName.equals(networkAdapterName)) {
+					result = vEth;
+					break;
+				}
+				if (externalId != null && externalId.equals(networkAdapterName)) {
+					result = vEth;
+					break;
+				}
+			}
+		}
+		
+		return result;
+	}
+	
 	
 	/**
 	 * Return the type of virtual device. (E1000, PCnet32, vmxnet etc.)
@@ -101,6 +151,92 @@ public class NetworkHelper {
 		
 		return type;
 	}
+
+	/**
+	 * Check if a nic exist on virtual machine.
+	 * @param networkAdapterName
+	 * @param vm
+	 * @return true if exist, false otherwise.
+	 */
+	public static boolean isNICExist(String networkAdapterName, VirtualMachine vm) {
+		boolean exist = false;
+		VirtualEthernetCard eth = findVirtualEthernetCardForVM(networkAdapterName, vm);
+		if (eth != null) {
+			exist = true;
+		}
+		return exist;
+		
+	}
 	
+	/**
+	 * Check if hostnetwork exist for a name.
+	 * @param hostNetworkName
+	 * @param host
+	 * @return
+	 */
+	public static boolean isHostNetworkExist(String hostNetworkName, HostSystem host) {
+		boolean exist = false;
+		try {
+			Network[] networks = host.getNetworks();
+			if (networks != null) {
+				for (Network network : networks) {
+					String hostNetwork = network.getName();
+					if (hostNetwork.equals(hostNetworkName)) {
+						exist = true;
+						break;
+					}
+				}
+			}
+		} catch (RemoteException ex) {
+			LOGGER.error("Error while reading networks on host: " + host.getName(), ex);
+			LOGGER.error("Message: " + ex.getMessage());
+		}
+		
+		return exist;
+	}
+	
+	
+	/**
+	 * Create device spec for network adapter (nic).
+	 * @param netName
+	 * @param nicName
+	 * @param mode ("generated", "manual", "assigned" by VC),this mode set the mac address.
+	 * @param ipAddress (ex: 192.168.1.1)
+	 * @return
+	 */
+	public static VirtualDeviceConfigSpec createNicSpec(String netName, String nicName, String mode, String ipAddress) {
+
+		VirtualDeviceConfigSpec nicSpec = new VirtualDeviceConfigSpec();
+		nicSpec.setOperation(VirtualDeviceConfigSpecOperation.add);
+		// TODO : Choose adapter type. E1000, pcnet etc.
+		// VirtualEthernetCard nic = new VirtualPCNet32();
+		VirtualEthernetCard nic = new VirtualE1000();
+		
+		VirtualEthernetCardNetworkBackingInfo nicBacking = new VirtualEthernetCardNetworkBackingInfo();
+		nicBacking.setDeviceName(netName);
+		
+		if (mode.equals(MODE_NETWORK_ADDRESS_MANUAL)) {
+			// TODO : Customize macAdress, manual configuration mode.
+		}
+		// TODO : Set ipAddress manually. via HostVirtualNicSpec see vijava sample AddVirtualNic..
+		nic.setAddressType(mode);
+		nic.setBacking(nicBacking);
+		nic.setKey(0);
+		LOGGER.info("Creating Network adapter : " + nicName + " on network: "+ netName + " in progress...");
+		
+		Description info = new Description();
+		info.setLabel(nicName);
+		info.setSummary(netName);
+		nic.setDeviceInfo(info);
+		nic.setExternalId(nicName);
+		
+		VirtualDeviceConnectInfo connectInfo = new VirtualDeviceConnectInfo();
+		connectInfo.setAllowGuestControl(true);
+		connectInfo.setStartConnected(true);
+		connectInfo.setConnected(true);
+		nic.setConnectable(connectInfo);
+		nicSpec.setDevice(nic);
+		return nicSpec;
+	}
 
 }
