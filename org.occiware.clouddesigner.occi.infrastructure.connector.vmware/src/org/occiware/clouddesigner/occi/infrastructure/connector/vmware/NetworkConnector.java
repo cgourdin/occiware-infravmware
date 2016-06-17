@@ -17,12 +17,14 @@ package org.occiware.clouddesigner.occi.infrastructure.connector.vmware;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.vmware.vim25.Description;
 import com.vmware.vim25.GuestNicInfo;
 import com.vmware.vim25.MethodFault;
 import com.vmware.vim25.TaskInfo;
 import com.vmware.vim25.TaskInfoState;
 import com.vmware.vim25.VirtualDeviceConfigSpec;
 import com.vmware.vim25.VirtualDeviceConfigSpecOperation;
+import com.vmware.vim25.VirtualDeviceConnectInfo;
 import com.vmware.vim25.VirtualEthernetCard;
 import com.vmware.vim25.VirtualMachineConfigSpec;
 import com.vmware.vim25.mo.Folder;
@@ -73,6 +75,8 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 */
 	private String hostNetworkName = null;
 
+	private String oldNetworkAdapterName = null;
+
 	/**
 	 * Constructs a network connector.
 	 */
@@ -116,6 +120,9 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 			LOGGER.warn("No network adapter name setted. Cant create the network.");
 			VCenterClient.disconnect();
 			return;
+		}
+		if (oldNetworkAdapterName == null) {
+			oldNetworkAdapterName = networkAdapterName;
 		}
 
 		// 3 - if exist, network is not created.
@@ -186,7 +193,7 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 				created = true;
 			}
 		} catch (RemoteException e) {
-			LOGGER.error("Error while creating an network adapter : " + vmName + " --< to vm : " + vmName, e);
+			LOGGER.error("Error while creating an network adapter : " + networkAdapterName + " --< to vm : " + vmName, e);
 			LOGGER.error("Message : " + e.getMessage());
 		}
 
@@ -234,7 +241,9 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 		if (hostNetworkName != null && hostNetworkName.isEmpty()) {
 			hostNetworkName = null;
 		}
-
+		if (oldNetworkAdapterName == null) {
+			oldNetworkAdapterName = networkAdapterName;
+		}
 		// Search the appropriate adapter if vm exist on vcenter.
 		getVMHostNetworkName(vm, netIntConn);
 		List<VirtualEthernetCard> vEths = null;
@@ -323,7 +332,7 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 			this.setSummary(ipAddressPlainLocal);
 		}
 
-		this.setLabel(networkAdapterName);
+		
 
 		// May be null if the device is not started...
 
@@ -333,6 +342,7 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 			} else {
 				this.setState(NetworkStatus.INACTIVE);
 			}
+			this.setLabel(vEthDevice.getDeviceInfo().getLabel());
 		}
 
 		// Network interface part.
@@ -371,8 +381,6 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 			VCenterClient.disconnect();
 			return;
 		}
-
-		occiRetrieve();
 		VCenterClient.disconnect();
 
 	}
@@ -410,9 +418,67 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 		if (hostNetworkName != null && hostNetworkName.isEmpty()) {
 			hostNetworkName = null;
 		}
-		
-		
-		
+		if (oldNetworkAdapterName == null) {
+			oldNetworkAdapterName = networkAdapterName;
+		}
+		if (oldNetworkAdapterName != null && networkAdapterName != null
+				&& !oldNetworkAdapterName.equals(networkAdapterName)) {
+			// Change the label name of the adapter.
+			VirtualEthernetCard vEthDevice = NetworkHelper.findVirtualEthernetCardForVM(oldNetworkAdapterName, vm);
+			if (vEthDevice == null) {
+				LOGGER.warn("no virtual device for this name: " + oldNetworkAdapterName
+						+ " , cant update the network device: " + oldNetworkAdapterName + " on vm: " + vmName);
+				oldNetworkAdapterName = null;
+				VCenterClient.disconnect();
+				return;
+			}
+			vEthDevice.setExternalId(networkAdapterName);
+			Description desc = vEthDevice.getDeviceInfo();
+			desc.setLabel(networkAdapterName);
+			vEthDevice.setDeviceInfo(desc);
+
+			VirtualMachineConfigSpec vmConfigSpec = new VirtualMachineConfigSpec();
+			VirtualDeviceConfigSpec nicSpec = new VirtualDeviceConfigSpec();
+			nicSpec.setOperation(VirtualDeviceConfigSpecOperation.edit);
+			nicSpec.setDevice(vEthDevice);
+			VirtualDeviceConfigSpec[] nicSpecArray = { nicSpec };
+			vmConfigSpec.setDeviceChange(nicSpecArray);
+			// Launch the reconfig task.
+			// Launch the task.
+			Task task;
+			try {
+				task = vm.reconfigVM_Task(vmConfigSpec);
+				task.waitForTask();
+
+			} catch (RemoteException | InterruptedException e) {
+				LOGGER.error(
+						"Error while updating a network adapter : " + networkAdapterName + " --< from vm : " + vmName,
+						e);
+				LOGGER.error("Message: " + e.getMessage());
+				VCenterClient.disconnect();
+				return;
+			}
+
+			TaskInfo taskInfo;
+			try {
+				taskInfo = task.getTaskInfo();
+				if (taskInfo.getState() != TaskInfoState.success) {
+					MethodFault fault = taskInfo.getError().getFault();
+					LOGGER.error(
+							"Error while updating a network adapter : " + networkAdapterName + " --< on vm : " + vmName,
+							fault.detail);
+					LOGGER.error("Fault message: " + fault.getMessage() + fault.getClass().getName());
+				} else {
+					LOGGER.info("The network : " + networkAdapterName + " is updated on virtual machine : " + vmName);
+				}
+			} catch (RemoteException e) {
+				LOGGER.error("Error while updating an network adapter : " + networkAdapterName + " --< to vm : " + vmName, e);
+				LOGGER.error("Message : " + e.getMessage());
+			}
+
+		} else {
+			LOGGER.warn("No value change, cant update.");
+		}
 
 		VCenterClient.disconnect();
 	}
@@ -444,7 +510,7 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 			networkAdapterName = null;
 		}
 		if (networkAdapterName == null) {
-			LOGGER.warn("No network adapter name setted. Cant create the network.");
+			LOGGER.warn("No network adapter name setted. Cant delete the network.");
 			VCenterClient.disconnect();
 			return;
 		}
@@ -500,7 +566,7 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 				LOGGER.info("The network : " + networkAdapterName + " is removed from virtual machine : " + vmName);
 			}
 		} catch (RemoteException e) {
-			LOGGER.error("Error while creating an network adapter : " + vmName + " --< to vm : " + vmName, e);
+			LOGGER.error("Error while deleting an network adapter : " + networkAdapterName + " --< to vm : " + vmName, e);
 			LOGGER.error("Message : " + e.getMessage());
 		}
 		VCenterClient.disconnect();
@@ -524,32 +590,101 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 			return;
 		}
 
+		// Load the virtual machine.
+		VirtualMachine vm = getVirtualMachineFromLinks();
+		if (vm == null) {
+			LOGGER.warn("No virtual machine is linked on the network.");
+			VCenterClient.disconnect();
+			return;
+		}
+
+		networkAdapterName = this.getTitle();
+
+		if (networkAdapterName != null && networkAdapterName.isEmpty()) {
+			networkAdapterName = null;
+		}
+		if (networkAdapterName == null) {
+			LOGGER.warn("No network adapter name setted. Cant load the network information.");
+			VCenterClient.disconnect();
+			return;
+		}
+
+		// Load the virtual ethernet card object from vm.
+		VirtualEthernetCard vEth = NetworkHelper.findVirtualEthernetCardForVM(networkAdapterName, vm);
+		if (vEth == null) {
+			LOGGER.error("Cant retrieve virtual ethernet card: " + networkAdapterName
+					+ " for action up, on virtual machine : " + vmName);
+			VCenterClient.disconnect();
+			return;
+		}
+		// Load the connect info.
+		VirtualDeviceConnectInfo connectInfo = vEth.getConnectable();
+		if (connectInfo == null) {
+			LOGGER.error("No connection information is found for this network : " + networkAdapterName);
+			VCenterClient.disconnect();
+			return;
+		}
+		boolean result = false;
+		// Get the linked Network interface connector.
+		NetworkinterfaceConnector netIntConn = getLinkedNetworkInterfaceForVM();
 		// Network State Machine.
 		switch (getState().getValue()) {
 
 		case NetworkStatus.ACTIVE_VALUE:
 			LOGGER.debug("Fire transition(state=active, action=\"up\")...");
-
-			// TODO Implement transition(state=active, action="up")
-
+			if (connectInfo.isConnected()) {
+				// Disconnect and reconnect.
+				result = NetworkHelper.down(vm, vEth);
+				if (result) {
+					this.setState(NetworkStatus.INACTIVE);
+					result = NetworkHelper.up(vm, vEth);
+				}
+			} else {
+				result = NetworkHelper.up(vm, vEth);
+			}
 			break;
 
 		case NetworkStatus.INACTIVE_VALUE:
 			LOGGER.debug("Fire transition(state=inactive, action=\"up\")...");
-
-			// TODO Implement transition(state=inactive, action="up")
-
+			if (!connectInfo.isConnected()) {
+				result = NetworkHelper.up(vm, vEth);
+			}
 			break;
 
 		case NetworkStatus.ERROR_VALUE:
 			LOGGER.debug("Fire transition(state=error, action=\"up\")...");
-
-			// TODO Implement transition(state=error, action="up")
-
+			if (!connectInfo.isConnected()) {
+				result = NetworkHelper.up(vm, vEth);
+			}
 			break;
 
 		default:
+			if (!connectInfo.isConnected()) {
+				result = NetworkHelper.up(vm, vEth);
+			}
 			break;
+		}
+		
+		if (result) {
+			LOGGER.info("The network : " + networkAdapterName + " is connected.");
+			this.setState(NetworkStatus.ACTIVE);
+			if (netIntConn != null) {
+				netIntConn.setState(NetworkInterfaceStatus.ACTIVE);
+			}
+		} else {
+			if (connectInfo.isConnected()) {
+				LOGGER.info("The network : " + networkAdapterName + " was already connected.");
+				this.setState(NetworkStatus.ACTIVE);
+				if (netIntConn != null) {
+					netIntConn.setState(NetworkInterfaceStatus.ACTIVE);
+				}
+			} else {
+				LOGGER.warn("The network is not connected, check your configuration.");
+				this.setState(NetworkStatus.INACTIVE);
+				if (netIntConn != null) {
+					netIntConn.setState(NetworkInterfaceStatus.INACTIVE);
+				}
+			}
 		}
 
 		VCenterClient.disconnect();
@@ -568,34 +703,60 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 			return;
 		}
 
-		// Network State Machine.
-		switch (getState().getValue()) {
-
-		case NetworkStatus.ACTIVE_VALUE:
-			LOGGER.debug("Fire transition(state=active, action=\"down\")...");
-
-			// TODO Implement transition(state=active, action="down")
-
-			break;
-
-		case NetworkStatus.INACTIVE_VALUE:
-			LOGGER.debug("Fire transition(state=inactive, action=\"down\")...");
-
-			// TODO Implement transition(state=inactive, action="down")
-
-			break;
-
-		case NetworkStatus.ERROR_VALUE:
-			LOGGER.debug("Fire transition(state=error, action=\"down\")...");
-
-			// TODO Implement transition(state=error, action="down")
-
-			break;
-
-		default:
-			break;
+		// Load the virtual machine.
+		VirtualMachine vm = getVirtualMachineFromLinks();
+		if (vm == null) {
+			LOGGER.warn("No virtual machine is linked on the network.");
+			VCenterClient.disconnect();
+			return;
 		}
 
+		networkAdapterName = this.getTitle();
+
+		if (networkAdapterName != null && networkAdapterName.isEmpty()) {
+			networkAdapterName = null;
+		}
+		if (networkAdapterName == null) {
+			LOGGER.warn("No network adapter name setted. Cant load the network information.");
+			VCenterClient.disconnect();
+			return;
+		}
+
+		// Load the virtual ethernet card object from vm.
+		VirtualEthernetCard vEth = NetworkHelper.findVirtualEthernetCardForVM(networkAdapterName, vm);
+		if (vEth == null) {
+			LOGGER.error("Cant retrieve virtual ethernet card: " + networkAdapterName
+					+ " for action up, on virtual machine : " + vmName);
+			VCenterClient.disconnect();
+			return;
+		}
+		// Load the connect info.
+		VirtualDeviceConnectInfo connectInfo = vEth.getConnectable();
+		if (connectInfo == null) {
+			LOGGER.error("No connection information is found for this network : " + networkAdapterName);
+			VCenterClient.disconnect();
+			return;
+		}
+		boolean result = false;
+		// Get the linked Network interface connector.
+		NetworkinterfaceConnector netIntConn = getLinkedNetworkInterfaceForVM();
+		// Network State Machine.
+		if (connectInfo.isConnected()) {
+			result = NetworkHelper.down(vm, vEth);
+			if (!result) {
+				this.setState(NetworkStatus.ACTIVE);
+				if (netIntConn != null) {
+					netIntConn.setState(NetworkInterfaceStatus.ACTIVE);
+				}
+			}
+		} 
+		if (result) {
+			this.setState(NetworkStatus.INACTIVE);
+			if (netIntConn != null) {
+				netIntConn.setState(NetworkInterfaceStatus.INACTIVE);
+			}
+		}
+		
 		VCenterClient.disconnect();
 	}
 
