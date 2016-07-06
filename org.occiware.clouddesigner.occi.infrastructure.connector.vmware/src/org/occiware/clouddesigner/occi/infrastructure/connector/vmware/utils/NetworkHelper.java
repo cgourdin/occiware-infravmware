@@ -14,12 +14,20 @@ package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils;
 
 import java.rmi.RemoteException;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.vmware.vim25.Description;
+import com.vmware.vim25.HostIpConfig;
+import com.vmware.vim25.HostNetworkPolicy;
+import com.vmware.vim25.HostPortGroup;
+import com.vmware.vim25.HostPortGroupSpec;
+import com.vmware.vim25.HostVirtualNicSpec;
+import com.vmware.vim25.HostVirtualSwitch;
+import com.vmware.vim25.HostVirtualSwitchSpec;
 import com.vmware.vim25.MethodFault;
 import com.vmware.vim25.TaskInfo;
 import com.vmware.vim25.TaskInfoState;
@@ -39,6 +47,8 @@ import com.vmware.vim25.VirtualPCNet32;
 import com.vmware.vim25.VirtualVmxnet;
 import com.vmware.vim25.VirtualVmxnet2;
 import com.vmware.vim25.VirtualVmxnet3;
+import com.vmware.vim25.mo.Folder;
+import com.vmware.vim25.mo.HostNetworkSystem;
 import com.vmware.vim25.mo.HostSystem;
 import com.vmware.vim25.mo.Network;
 import com.vmware.vim25.mo.Task;
@@ -133,9 +143,37 @@ public class NetworkHelper {
 				}
 			}
 		}
-
+		
 		return result;
 	}
+	
+	/**
+	 * Get all virtual ethernet card object for a VM.
+	 * @param vm
+	 * @return 
+	 */
+	public static List<VirtualEthernetCard> getNetworkAdaptersForVM(String vmName) {
+		List<VirtualEthernetCard> vEths = new ArrayList<>();
+		if (vmName == null) {
+			return vEths;
+		}
+		
+		VirtualEthernetCard vEth;
+		
+		Folder rootFolder = VCenterClient.getServiceInstance().getRootFolder();
+		VirtualMachineConfigInfo vmConfig;
+		VirtualMachine vm = VMHelper.findVMForName(rootFolder, vmName);
+		
+		VirtualDevice[] vdevices = vm.getConfig().getHardware().getDevice();
+		for (VirtualDevice device : vdevices) {
+			if (device instanceof VirtualEthernetCard) {
+				vEth = (VirtualEthernetCard) device;
+				vEths.add(vEth);
+			}
+		}
+		return vEths;
+	}
+	
 
 	/**
 	 * Return the type of virtual device. (E1000, PCnet32, vmxnet etc.)
@@ -222,7 +260,11 @@ public class NetworkHelper {
 	 * @return
 	 */
 	public static VirtualDeviceConfigSpec createNicSpec(String netName, String nicName, String mode, String ipAddress) {
-
+		// TODO : Set ipAddress manually. via HostVirtualNicSpec see vijava
+				// sample AddVirtualNic..it is for vswitch not the nic for virtual machine.
+		
+		
+		
 		VirtualDeviceConfigSpec nicSpec = new VirtualDeviceConfigSpec();
 		nicSpec.setOperation(VirtualDeviceConfigSpecOperation.add);
 		// TODO : Choose adapter type. E1000, pcnet etc.
@@ -235,8 +277,7 @@ public class NetworkHelper {
 		if (mode.equals(MODE_NETWORK_ADDRESS_MANUAL)) {
 			// TODO : Customize macAdress, manual configuration mode.
 		}
-		// TODO : Set ipAddress manually. via HostVirtualNicSpec see vijava
-		// sample AddVirtualNic..
+		
 		nic.setAddressType(mode);
 		nic.setBacking(nicBacking);
 		nic.setKey(0);
@@ -257,6 +298,103 @@ public class NetworkHelper {
 		return nicSpec;
 	}
 
+	
+	/**
+	 * Create a new VSwitch and create a port group attached.
+	 * @param vSwitchName, the vSwitch name.
+	 * @param portGroupName, this is here the network name.
+	 * @param nbSwitchPort (default to 8 if nb port = 0).
+	 * @param vlanId : the VLAN id to associate
+	 * @param host : the host real machine
+	 * @param macAddress : if null, mac address is set automatically
+	 * @param ipAddress IP Address to VMKernel.
+	 * @param subnetMask
+	 * @param dhcpMode : true dhcp mode, false manual ip addressing mode.
+	 * @return
+	 */
+	public static HostNetworkSystem createVSwitch(String vSwitchName, String portGroupName, int nbSwitchPort, int vlanId, HostSystem host,String macAddress, String ipAddress, String subnetMask, boolean dhcpMode) {
+		try {
+			
+			HostNetworkSystem hns = host.getHostNetworkSystem();
+			// add a virtual switch
+		    HostVirtualSwitchSpec spec = new HostVirtualSwitchSpec();
+		    if (nbSwitchPort == 0) {
+		    	nbSwitchPort = 8;
+		    }
+		    spec.setNumPorts(nbSwitchPort);
+		    hns.addVirtualSwitch(vSwitchName, spec);
+		    
+		    // add a port group
+		    HostPortGroupSpec hpgs = new HostPortGroupSpec();
+		    hpgs.setName(portGroupName);
+		    hpgs.setVlanId(vlanId); // 0 ==> not associated with a VLAN
+		    hpgs.setVswitchName(vSwitchName);
+		    hpgs.setPolicy(new HostNetworkPolicy());
+		    hns.addPortGroup(hpgs);
+		    
+		    // add a virtual NIC to VMKernel
+		    HostVirtualNicSpec hvns = new HostVirtualNicSpec();
+		    // If a mac address is set. 
+		    if (macAddress != null) {
+		    	hvns.setMac(macAddress);
+		    }
+		    HostIpConfig hic = new HostIpConfig();
+		    
+		    hic.setDhcp(dhcpMode);
+		    if (!dhcpMode) {
+		    	if (ipAddress != null) {
+		    		hic.setIpAddress(ipAddress);	
+		    	} 
+		    	if (subnetMask != null) {
+		    		hic.setSubnetMask(subnetMask);
+		    	}
+		    }
+		    
+		    hvns.setIp(hic);
+		    
+		    String result = hns.addVirtualNic("VMKernel", hvns);
+		    
+		    LOGGER.error(result);
+		
+		
+			return hns;
+		} catch (RemoteException ex) {
+			LOGGER.error("Cant create vswitch : " + ex.getMessage());
+			return null;
+		}
+		
+	}
+	
+	/**
+	 * Retrieve a hostPortGroup object to get vswitch info and port group info.
+	 * @param host
+	 * @param networkName (portGroupName)
+	 * @return a {@link HostPortGroup} if none found, null value is returned.
+	 */
+	public static HostPortGroup findPortGroup(HostSystem host, String networkName) {
+		HostPortGroup portGroupResult = null;
+		try {
+			HostPortGroup[] portGroups = host.getHostNetworkSystem().getNetworkInfo().getPortgroup();
+			if (portGroups == null) {
+				LOGGER.error("No port group on host: " + host.getName());
+				return portGroupResult;
+			}
+			for (HostPortGroup portGroup: portGroups) {
+				if (portGroup.getSpec().getName().equals(networkName)) {
+					portGroupResult = portGroup;
+					break;
+				}
+ 				
+			}
+		} catch (RemoteException ex) {
+			LOGGER.error("Cant find hostPortGroup: " + networkName + "  on host: " + host.getName());
+			LOGGER.error("Message: " + ex.getMessage());
+			ex.printStackTrace();
+		}
+		return portGroupResult;
+	}
+	
+	
 	/**
 	 * Action up on network adapter on vm.
 	 * @param vm

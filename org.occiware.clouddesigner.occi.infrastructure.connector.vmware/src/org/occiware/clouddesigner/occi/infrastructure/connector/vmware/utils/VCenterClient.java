@@ -12,10 +12,13 @@
  */
 package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils;
 
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.nio.file.FileSystems;
 import java.rmi.RemoteException;
 import java.util.Properties;
 
@@ -48,9 +51,19 @@ public class VCenterClient {
 		if (url == null) {
 			Properties prop = new Properties();
 
-			String credentialFile = "/resources/credential.properties";
+			// String credentialFile = "/resources/credential.properties";
+			String homePath = System.getProperty("user.home") + FileSystems.getDefault().getSeparator();
+			InputStream in = new FileInputStream(homePath + "vmware-credential.properties");
 
-			prop.load(VCenterClient.class.getClassLoader().getResourceAsStream(credentialFile));
+			prop.load(in);
+			if (in != null) {
+				try {
+					in.close();
+					
+				} catch (IOException ex) {
+					// no op.
+				}
+			}
 			// VCenterClient.class.getClassLoader().getResourceAsStream(credentialFile);
 			if (prop.containsKey("vcenter.url")) {
 				// prop.load(in);

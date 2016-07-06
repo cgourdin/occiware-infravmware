@@ -334,18 +334,28 @@ public class VMHelper {
 	}
 
 	/**
-	 * Get the number of cpu of this virtual machine.
+	 * Get the number of cores by cpu of this virtual machine.
 	 * 
 	 * @param vm
-	 * @return an Integer that represents the number of cpu.
+	 * @return an Integer that represents the number of cores.
 	 */
-	public static Integer getNumCPU(final VirtualMachine vm) {
-		Integer cpus = 0;
+	public static Integer getCoreNumber(final VirtualMachine vm) {
+		Integer nbCore = 0;
 		if (vm != null) {
 			VirtualHardware hw = vm.getConfig().getHardware();
-			cpus = hw.getNumCPU();
+			nbCore = hw.getNumCPU() / hw.getNumCoresPerSocket();
 		}
-		return cpus;
+		return nbCore;
+	}
+	
+	
+	public static Integer getNumCPU(final VirtualMachine vm) {
+		Integer nbCpu = 0;
+		if (vm != null) {
+			VirtualHardware hw = vm.getConfig().getHardware();
+			nbCpu = hw.getNumCPU();
+		}
+		return nbCpu;
 	}
 
 	/**

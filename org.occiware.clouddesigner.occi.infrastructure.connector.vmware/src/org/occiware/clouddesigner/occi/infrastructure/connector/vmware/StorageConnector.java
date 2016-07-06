@@ -27,7 +27,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.eclipse.emf.common.util.EList;
+import org.occiware.clouddesigner.occi.AttributeState;
 import org.occiware.clouddesigner.occi.Link;
+import org.occiware.clouddesigner.occi.OCCIFactory;
 import org.occiware.clouddesigner.occi.Resource;
 import org.occiware.clouddesigner.occi.infrastructure.StorageStatus;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.AttachDiskException;
@@ -727,5 +729,61 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		}
 		
 	}
+	/**
+	 * get attribute value with his occi key, deserve when no property value
+	 * set, with Mixin attribute as it is defined by Cloud designer.
+	 * 
+	 * @param key
+	 * @return an attribute value, null if no one is found.
+	 */
+	public String getAttributeValueByOcciKey(String key) {
+		String value = null;
+		if (key == null) {
+			return value;
+		}
+
+		List<AttributeState> attrs = this.getAttributes();
+		for (AttributeState attr : attrs) {
+			if (attr.getName().equals(key)) {
+				value = attr.getValue();
+				break;
+			}
+		}
+
+		return value;
+
+	}
+	/**
+	 * Create an attribute without add this to the current connector object.
+	 * @param name
+	 * @param value
+	 * @return AttributeState object.
+	 */
+	public AttributeState createAttribute(final String name, final String value) {
+		AttributeState attr = OCCIFactory.eINSTANCE.createAttributeState();
+		attr.setName(name);
+		attr.setValue(value);
+		return attr;	
+	}
+	/**
+     * Get an attribute state object for key parameter.
+     * @param key ex: occi.core.title.
+     * @return an AttributeState object, if attribute doesnt exist, null value is returned.
+     */
+    private AttributeState getAttributeStateObject(final String key) {
+    	AttributeState attr = null;
+    	if (key == null) {
+    		return attr;
+    	}
+    	// Load the corresponding attribute state.
+    	for (AttributeState attrState : this.getAttributes()) {
+    		if (attrState.getName().equals(key)) {
+    			attr = attrState;
+    			break;
+    		}
+    	}
+    	
+    	return attr;
+    }
 
 }

@@ -12,12 +12,23 @@
  */
 package org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.Volume;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.AttachDiskException;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.DetachDiskException;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.addons.exceptions.DiskNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.vmware.vim25.VirtualDevice;
+import com.vmware.vim25.VirtualDeviceBackingInfo;
+import com.vmware.vim25.VirtualDeviceFileBackingInfo;
+import com.vmware.vim25.VirtualDisk;
+import com.vmware.vim25.mo.VirtualMachine;
 
 public class VolumeHelper {
 	
@@ -276,5 +287,41 @@ public class VolumeHelper {
 		return result;
 	}
 	
+	/**
+	 * Get all vmware virtual disk object for a VM. 
+	 * @param vm
+	 * @return a map of String (diskName), VirtualDisk.
+	 */
+	public static Map<String, VirtualDisk> getVirtualDiskForVM(VirtualMachine vm) {
+		
+		
+		Map<String, VirtualDisk> mapDisks = new HashMap<>(); 
+		if (vm == null) {
+			return mapDisks;
+		}
+		VirtualDevice[] devices = vm.getConfig().getHardware().getDevice();
+		
+		String diskName;
+		
+		// Search on devices.
+		for (VirtualDevice device : devices) {
+			diskName = null;
+			if (device == null) {
+				continue;
+			} else if (device instanceof VirtualDisk) {
+				VirtualDisk disk = (VirtualDisk) device;
+				VirtualDeviceBackingInfo vdbi = device.getBacking();
+				
+				if (vdbi instanceof VirtualDeviceFileBackingInfo) {
+					diskName = ((VirtualDeviceFileBackingInfo) vdbi).getFileName();
+					// Add to map.
+					mapDisks.put(diskName, disk);
+				}
+			}
+		}
+		
+		
+		return mapDisks;
+	}
 	
 }

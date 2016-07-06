@@ -16,16 +16,24 @@ package org.occiware.clouddesigner.occi.infrastructure.connector.vmware;
 
 import java.rmi.RemoteException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 
 import org.eclipse.emf.common.util.EList;
 import org.occiware.clouddesigner.occi.AttributeState;
 import org.occiware.clouddesigner.occi.Configuration;
+import org.occiware.clouddesigner.occi.Entity;
+import org.occiware.clouddesigner.occi.Extension;
+import org.occiware.clouddesigner.occi.Kind;
 import org.occiware.clouddesigner.occi.Link;
-import org.occiware.clouddesigner.occi.OCCIRegistry;
+import org.occiware.clouddesigner.occi.OCCIFactory;
 import org.occiware.clouddesigner.occi.Resource;
 import org.occiware.clouddesigner.occi.infrastructure.Architecture;
 import org.occiware.clouddesigner.occi.infrastructure.ComputeStatus;
+import org.occiware.clouddesigner.occi.infrastructure.InfrastructurePackage;
+import org.occiware.clouddesigner.occi.infrastructure.StorageStatus;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.allocator.AllocatorImpl;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.ClusterHelper;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.DatacenterHelper;
@@ -34,16 +42,37 @@ import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.Hos
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.NetworkHelper;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VCenterClient;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VMHelper;
+import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VolumeHelper;
+import org.occiware.clouddesigner.occi.infrastructure.impl.InfrastructurePackageImpl;
+import org.occiware.clouddesigner.occi.infrastructure.impl.StoragelinkImpl;
 import org.occiware.clouddesigner.occi.util.OcciHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.vmware.vim25.CustomizationAdapterMapping;
+import com.vmware.vim25.CustomizationDhcpIpGenerator;
+import com.vmware.vim25.CustomizationFixedIp;
+import com.vmware.vim25.CustomizationFixedName;
+import com.vmware.vim25.CustomizationGlobalIPSettings;
+import com.vmware.vim25.CustomizationGuiUnattended;
+import com.vmware.vim25.CustomizationIPSettings;
+import com.vmware.vim25.CustomizationIdentification;
+import com.vmware.vim25.CustomizationLinuxOptions;
+import com.vmware.vim25.CustomizationLinuxPrep;
+import com.vmware.vim25.CustomizationNetBIOSMode;
+import com.vmware.vim25.CustomizationSpec;
+import com.vmware.vim25.CustomizationSysprep;
+import com.vmware.vim25.CustomizationUserData;
+import com.vmware.vim25.CustomizationWinOptions;
 import com.vmware.vim25.VirtualDeviceConfigSpec;
+import com.vmware.vim25.VirtualDisk;
+import com.vmware.vim25.VirtualEthernetCard;
 import com.vmware.vim25.VirtualMachineCloneSpec;
 import com.vmware.vim25.VirtualMachineConfigSpec;
 import com.vmware.vim25.VirtualMachineFileInfo;
 import com.vmware.vim25.VirtualMachineGuestOsIdentifier;
 import com.vmware.vim25.VirtualMachineRelocateSpec;
+import com.vmware.vim25.VirtualMachineStorageInfo;
 import com.vmware.vim25.mo.ClusterComputeResource;
 import com.vmware.vim25.mo.Datacenter;
 import com.vmware.vim25.mo.Datastore;
@@ -71,8 +100,6 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 * Define VMWare specifications for this compute.
 	 */
 	protected VirtualMachineConfigSpec vmSpec = null;
-
-	
 
 	private String datacenterName = null;
 	private String datastoreName = null;
@@ -110,25 +137,40 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		ServiceInstance si = VCenterClient.getServiceInstance();
 		Folder rootFolder = si.getRootFolder();
 		AllocatorImpl allocator = new AllocatorImpl(rootFolder);
-		boolean toCreate = false;
-		
+
 		String vmName = this.getTitle();
 		vmOldName = vmName;
 		HostSystem host = null;
 		ClusterComputeResource cluster = null;
-		/**
-		 * Network name (host / hardware).
-		 */
-		String netName = null;
-		/**
-		 * Network adapter name. ex: Network Adapter 1.
-		 */
-		String nicName = null;
 
-		// Get image via OS_TPL mixin, for now this is attributes of this
-		// object, and will be on an object mixin in future.
+		if (vmName == null) {
+			LOGGER.error("Cant create a new virtual machine, the vm name is not set. ");
+			VCenterClient.disconnect();
+			return;
+		}
 
-		String osMixinTerm;
+		// Check if this vm already exist if this is the case, we retrieve his
+		// value but no other things to create.....
+
+		if (VMHelper.isVMExistForName(rootFolder, vmName)) {
+
+			LOGGER.warn("VM : " + vmName + " already exist. Cant create.");
+			occiRetrieve(); // Retrieve values and disconnect from vcenter.
+			return;
+		}
+
+		// Get the list of linked network adapters, by this we get the network
+		// vSwitch, if none declared we allocate an available network, if none
+		// we create the network.
+		List<NetworkinterfaceConnector> netInterfaceConn = getNetworkInterfaces();
+
+		// Same for storage we get the storage links.
+		List<StoragelinkConnector> storageLinks = getLinkedStorages();
+
+		// Template or not ?
+		String vmTemplateName = this.getAttributeValueByOcciKey("occi.compute.image");
+		boolean hasTemplate = vmTemplateName != null;
+
 		String guestOsId = null;
 
 		// For now, we set manually attributes for datacenterName, datastoreName
@@ -136,13 +178,13 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		for (AttributeState attrState : this.getAttributes()) {
 
 			switch (attrState.getName()) {
-			case "datacenterName":
+			case "occi.compute.vmware.datacentername":
 				this.setDatacenterName(attrState.getName());
 				break;
-			case "clusterName":
+			case "occi.compute.vmware.clustername":
 				this.setClusterName(attrState.getName());
 				break;
-			case "hostSystemName":
+			case "occi.compute.vmware.hostsystemname":
 				this.setHostSystemName(attrState.getName());
 				break;
 			}
@@ -162,400 +204,499 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		} else {
 			allocator.setDc(datacenter);
 		}
-		
+
 		this.setDatacenterName(datacenter.getName());
 
 		// Defines if vm is already setup in vcenter, if this is the case we
 		// retrieve its values.
-		try {
-			toCreate = !VMHelper.isVMExistForName(datacenter.getVmFolder(), vmName);
-		} catch (RemoteException ex) {
-			LOGGER.error("cant query to check if the virtual machine exist, msg: " + ex.getMessage());
+		// try {
+		// toCreate = !VMHelper.isVMExistForName(datacenter.getVmFolder(),
+		// vmName);
+		// } catch (RemoteException ex) {
+		// LOGGER.error("cant query to check if the virtual machine exist, msg:
+		// " + ex.getMessage());
+		// VCenterClient.disconnect();
+		// return;
+		// }
+		// if (toCreate) {
+
+		// Cluster part (not mandatory), we could create a VM (host before)
+		// on datacenter
+		// directly.
+
+		cluster = ClusterHelper.findClusterForName(datacenter, this.getClusterName());
+		if (cluster == null) {
+			// Assign a cluster that already exist, if none found, no
+			// cluster.
+			cluster = allocator.allocateCluster();
+		}
+		if (cluster == null) {
+			LOGGER.error("cant allocate a cluster --< No cluster available on datacenter : " + datacenter.getName());
 			VCenterClient.disconnect();
 			return;
+		} else {
+			this.setClusterName(cluster.getName());
 		}
-		if (toCreate) {
-
-			// Cluster part (not mandatory), we could create a VM (host before)
-			// on datacenter
-			// directly.
-
-			cluster = ClusterHelper.findClusterForName(datacenter, this.getClusterName());
-			if (cluster == null) {
-				// if no cluster is present and this cluster has no name, we
-				// can't create a new cluster if there's a name, we create a
-				// cluster.
-				if (this.getClusterName() != null) {
-					// create a new cluster with this name
-					// TODO : in future mixin with attributes pass here.
-					cluster = ClusterHelper.createCluster(datacenter, this.getClusterName());
+		// Detect the hostsystem for deploying this virtual machine on.
+		try {
+			host = HostHelper.findHostSystemForName(datacenter.getHostFolder(), this.getHostSystemName());
+		} catch (RemoteException ex) {
+			LOGGER.error("Error while searching host folder.");
+			LOGGER.error("Message: " + ex.getMessage());
+			return;
+		}
+		if (host == null) {
+			if (this.getHostSystemName() == null) {
+				host = allocator.allocateHostSystem();
+				if (host == null) {
+					LOGGER.error(
+							"cant allocate automaticly an hostsystem, cause: there's no available host on the datacenter: "
+									+ datacenter.getName());
+					VCenterClient.disconnect();
+					return;
 				} else {
-					// Assign a cluster that already exist, if none found, no
-					// cluster.
-					cluster = allocator.allocateCluster();
+					this.setHostSystemName(host.getName());
 				}
-
-			}
-			if (cluster == null) {
-				LOGGER.error(
-						"cant allocate a cluster --< No cluster available on datacenter : " + datacenter.getName());
+			} else {
+				// Error on allocating the hostsystem.
+				LOGGER.error("cant allocate the hostSystem: " + this.getHostSystemName()
+						+ " --< cause: this doesnt exist on the datacenter: " + datacenter.getName());
 				VCenterClient.disconnect();
 				return;
-			} else {
-				this.setClusterName(cluster.getName());
 			}
+		}
+		this.setHostSystemName(host.getName());
 
-			// Image part.
-			VirtualMachine vmTemplate = null;
-			// identifier of the os guest or the template image
-			// osMixinTerm = this.getOsTpl(); // Get value of os_tpl attribute
-			// (in
-			// near futur this will be mixin
-			// object).
-			// TODO : Mixin os_tpl --> term value is not accessible via
-			// clouddesigner for now, when there is a solution, this will be
-			// replaced by the good place.
-			osMixinTerm = this.getSummary();
-			if (osMixinTerm != null && !osMixinTerm.trim().isEmpty()) {
-				// Search the OS template (VM Template) for this name.
-				try {
-					vmTemplate = VMHelper.findVMForName(datacenter.getVmFolder(), osMixinTerm);
-				} catch (RemoteException ex) {
-					LOGGER.error("Error while searching the vm template folder.");
-					LOGGER.error("Message: " + ex.getMessage());
-					return;
-				}
-				if (vmTemplate == null) {
-					LOGGER.warn("No virtual machine template found with this name : " + osMixinTerm);
-					// No VM template found, retrograde to guestOSId.
-					// Get the corresponding value from api :
-					guestOsId = VirtualMachineGuestOsIdentifier.valueOf(osMixinTerm).toString();
-				} else {
-					if (vmTemplate.getConfig().isTemplate()) {
-						guestOsId = vmTemplate.getConfig().getGuestId();
-					}
-				}
-			}
-
-			// Detect the hostsystem for deploying this virtual machine on.
+		// Image part.
+		VirtualMachine vmTemplate = null;
+		if (hasTemplate) {
 			try {
-				host = HostHelper.findHostSystemForName(datacenter.getHostFolder(), this.getHostSystemName());
+				vmTemplate = VMHelper.findVMForName(datacenter.getVmFolder(), vmTemplateName);
 			} catch (RemoteException ex) {
-				LOGGER.error("Error while searching host folder.");
+				LOGGER.error("Error while searching the vm template folder.");
 				LOGGER.error("Message: " + ex.getMessage());
 				return;
 			}
-			if (host == null) {
-				if (this.getHostSystemName() == null) {
-					host = allocator.allocateHostSystem();
-					if (host == null) {
-						LOGGER.error(
-								"cant allocate automaticly an hostsystem, cause: there's no available host on the datacenter: "
-										+ datacenter.getName());
-						VCenterClient.disconnect();
-						return;
-					} else {
-						this.setHostSystemName(host.getName());
-					}
-				} else {
-					// Error on allocating the hostsystem.
-					LOGGER.error("cant allocate the hostSystem: " + this.getHostSystemName()
-							+ " --< cause: this doesnt exist on the datacenter: " + datacenter.getName());
-					VCenterClient.disconnect();
-					return;
+		}
+
+		if (vmTemplate == null) {
+			LOGGER.warn("No virtual machine template found, guest os is unknown, " + vmTemplateName);
+			// No VM template found, retrograde to guestOSId.
+			// Get the corresponding value from api :
+			guestOsId = VirtualMachineGuestOsIdentifier.valueOf(vmTemplateName).toString();
+		} else {
+			if (vmTemplate.getConfig().isTemplate()) {
+				guestOsId = vmTemplate.getConfig().getGuestId();
+			}
+		}
+
+		// Get the devices storage.
+		// The storage is based on a datastore, we must find the
+		// corresponding datastore.
+
+		// First we search the datastoreName on entity link.
+
+		Datastore datastore = null;
+		StoragelinkConnector stMain = getMainStorageLink();
+		List<StoragelinkConnector> stOtherLinks = getOtherStorageLink();
+
+		if (!storageLinks.isEmpty()) {
+			// Searching on main storage connector attributes.
+			if (stMain != null) {
+				StorageConnector stMainConn = (StorageConnector) stMain.getTarget();
+
+				if (stMainConn != null) {
+					this.setDatastoreName(stMainConn.getAttributeValueByOcciKey("occi.storage.vmware.datastore"));
+				}
+
+				if (this.getDatastoreName() != null) {
+					datastore = DatastoreHelper.findDatastoreForName(datacenter, this.getDatastoreName());
 				}
 			}
-			this.setHostSystemName(host.getName());
+		}
+		// TODO : Add multiple mounted disks support.
+		// if (!stOtherLinks.isEmpty()) {
+		// LOGGER.warn(
+		// "Warning other disks detected for this compute instance, this is not
+		// supported at this time, and may be supported in near future");
+		// }
 
-			// Get the devices storage.
-			// The storage is based on a datastore, we must find the
-			// corresponding datastore.
+		// Get Main disk, if template mode, the main disk is already defined by
+		// the template.
+		if (stMain == null && vmTemplate == null) {
+			LOGGER.error("No main disk storage defined on / or on c:");
+			VCenterClient.disconnect();
+			return;
+		}
 
-			// First we search the datastoreName on entity link.
-			EList<Link> links = this.getLinks();
-			Datastore datastore = null;
-			StoragelinkConnector stMain = getMainStorageLink();
-			List<StoragelinkConnector> stOtherLinks = getOtherStorageLink();
+		StorageConnector mainStorage = null;
+		if (vmTemplate == null && stMain != null && stMain.getSource() instanceof StorageConnector) {
+			mainStorage = (StorageConnector) stMain.getTarget();
+		}
 
-			if (!links.isEmpty()) {
-				// Searching on main storageLink attributes.
-
-				if (stMain != null) {
-					for (AttributeState attrState : stMain.getAttributes()) {
-						if (attrState.getName().equals("datastoreName")) {
-							this.setDatastoreName(attrState.getValue());
-							break;
-						}
-					}
-
-					if (this.getDatastoreName() != null) {
-						datastore = DatastoreHelper.findDatastoreForName(datacenter, this.getDatastoreName());
-					}
-				}
-			}
-			// TODO : Add multiple mounted disks support.
-			if (!stOtherLinks.isEmpty()) {
-				LOGGER.warn(
-						"Warning other disks detected for this compute instance, this is not supported at this time, and may be supported in near future");
-			}
-			// Get Main disk.
-			if (stMain == null && vmTemplate == null) {
-				LOGGER.error("No main disk storage defined on / or on c:");
+		// Datastore automatic allocation if none found.
+		if (datastore == null) {
+			// Allocate a datastore automaticly.
+			datastore = allocator.allocateDatastore();
+			if (datastore == null) {
+				LOGGER.error("cant allocate a datastore on datacenter: " + datacenter.getName()
+						+ " --> there's no available datastore on the datacenter.");
 				VCenterClient.disconnect();
 				return;
 			}
-			StorageConnector mainStorage = null;
-			if (vmTemplate == null && stMain.getSource() instanceof StorageConnector) {
-				mainStorage = (StorageConnector) stMain.getSource();
-			} else if (vmTemplate == null) {
-				mainStorage = (StorageConnector) stMain.getTarget();
-			}
+		}
+		this.setDatastoreName(datastore.getName());
 
-			// Datastore automatic allocation if none found.
-			if (datastore == null) {
-				// Allocate a datastore automaticly.
-				datastore = allocator.allocateDatastore();
-				if (datastore == null) {
-					LOGGER.error("cant allocate a datastore on datacenter: " + datacenter.getName()
-							+ " --> there's no available datastore on the datacenter.");
+		Folder vmFolder;
+
+		// Get the first adapter (eth0 or name Network adapter 1 or Adaptateur
+		// réseau 1).
+		NetworkConnector firstConnector = this.getFirstAdapterNetwork(netInterfaceConn);
+
+		// Creation part.
+		if (vmTemplate != null) {
+			// We clone the vm.
+			try {
+				vmFolder = (Folder) datacenter.getVmFolder();
+				ResourcePool rp = (ResourcePool) new InventoryNavigator(datacenter)
+						.searchManagedEntities("ResourcePool")[0];
+				VirtualMachineCloneSpec cloneSpec = new VirtualMachineCloneSpec();
+				VirtualMachineRelocateSpec vmRelocate = new VirtualMachineRelocateSpec();
+				vmRelocate.setHost(host.getMOR());
+				vmRelocate.setPool(rp.getMOR());
+				vmRelocate.setDatastore(datastore.getMOR());
+				cloneSpec.setLocation(vmRelocate);
+				cloneSpec.setTemplate(false);
+				cloneSpec.setPowerOn(false);
+
+				if (vmTemplate.getCurrentSnapShot() != null) {
+					cloneSpec.snapshot = vmTemplate.getCurrentSnapShot().getMOR();
+				}
+
+				LOGGER.info("Creating the Virtual Machine >> " + this.getTitle() + " << from template: "
+						+ vmTemplate.getName());
+
+				// TODO : guest hostname (lvl OS), when set, create a
+				// customizationSpec.setDomain(hostname) for the
+				// corresponding operating system. It is not implemented for
+				// now.
+				// On linux or windows ?
+				boolean onWindows = false;
+				boolean onLinux = false;
+				if (guestOsId != null) {
+					if (guestOsId.toLowerCase().contains("linux") || guestOsId.contains("ubuntu")
+							|| guestOsId.contains("debian") || guestOsId.contains("fedora")
+							|| guestOsId.contains("redhat")) {
+						onLinux = true;
+					}
+					if (guestOsId.toLowerCase().contains("windows") || guestOsId.contains("win")) {
+						onWindows = true;
+					}
+				}
+				CustomizationSpec customSpec = new CustomizationSpec();
+
+				String ipAddress = firstConnector.getAttributeValueByOcciKey("occi.networkinterface.address");
+				String gateway = firstConnector.getAttributeValueByOcciKey("occi.networkinterface.gateway");
+
+				if (onLinux) {
+					customSpec = createLinuxCustomization(ipAddress, gateway);
+				}
+				if (onWindows) {
+					// customSpec = createWindowsCustomization();
+				}
+				cloneSpec.setCustomization(customSpec);
+
+				vmSpec = new VirtualMachineConfigSpec();
+				vmSpec.setName(vmName);
+				vmSpec.setAnnotation("VirtualMachine Annotation");
+
+				Float memSizeGB = this.getMemory();
+
+				Long memSizeGBLng = memSizeGB.longValue();
+				Long memSizeMB = memSizeGBLng * 1024;
+
+				if (memSizeGBLng == 0L || this.getCores() == 0) {
+					LOGGER.error("You must set the memory size (in GB) and the number of cores.");
 					VCenterClient.disconnect();
 					return;
 				}
-			}
-			this.setDatastoreName(datastore.getName());
 
-			Folder vmFolder;
+				vmSpec.setMemoryMB(memSizeMB);
 
-			if (vmTemplate != null) {
-				// We clone the vm.
-				try {
-					vmFolder = (Folder) datacenter.getVmFolder();
-					ResourcePool rp = (ResourcePool) new InventoryNavigator(datacenter)
-							.searchManagedEntities("ResourcePool")[0];
-					VirtualMachineCloneSpec cloneSpec = new VirtualMachineCloneSpec();
-					VirtualMachineRelocateSpec vmRelocate = new VirtualMachineRelocateSpec();
-					vmRelocate.setHost(host.getMOR());
-					vmRelocate.setPool(rp.getMOR());
-					vmRelocate.setDatastore(datastore.getMOR());
-					cloneSpec.setLocation(vmRelocate);
-					cloneSpec.setTemplate(false);
-					cloneSpec.setPowerOn(false);
+				// If attribute occi.compute.vcpu is setted, we calculate the nb
+				// cores per socket.
+				assignVCpuToVMSpec();
 
-					// TODO : guest hostname (lvl OS), when set, create a
-					// customizationSpec.setDomain(hostname) for the
-					// corresponding operating system. It is not implemented for
-					// now.
+				vmSpec.setGuestId(guestOsId);
+				vmSpec.setCpuHotAddEnabled(true);
+				// vmSpec.setCpuHotRemoveEnabled(true);
+				vmSpec.setMemoryHotAddEnabled(true);
 
-					if (vmTemplate.getCurrentSnapShot() != null) {
-						cloneSpec.snapshot = vmTemplate.getCurrentSnapShot().getMOR();
-					}
+				// Rebuild the networks allocation.
+				String networkName = null;
+				List<VirtualDeviceConfigSpec> nicSpecs = new LinkedList<>();
+				// Load each network interfaces and their network and nic names,
+				// add to device change.
+				if (!netInterfaceConn.isEmpty()) {
 
-					LOGGER.info("Creating the Virtual Machine >> " + this.getTitle() + " << from template: "
-							+ vmTemplate.getName());
-
-					com.vmware.vim25.mo.Task taskVm = vmTemplate.cloneVM_Task(vmFolder, vmName, cloneSpec);
-					// TODO : Monitoring Task in other thread.
-					String result = taskVm.waitForTask();
-					if (result == com.vmware.vim25.mo.Task.SUCCESS) {
-						LOGGER.info("Virtual Machine successfully created from template : " + vmTemplate.getName());
-						// Find the values of this vm and update this
-						// compute resource model.
-						// occiRetrieve();
-					} else {
-						LOGGER.info("VM couldn't be created ! vm name: " + vmName + " from template: "
-								+ vmTemplate.getName());
-					}
-					// final Task task = vmTemplate.cloneVM_Task(vmFolder,
-					// vmName, cloneSpec);
-					// CloneVM cloneVM = new CloneVM(vmFolder, vmTemplate,
-					// vmName, cloneSpec);
-					// Runnable run = cloneVM.createTask();
-					// new Thread(run).start();
-
-				} catch (RemoteException | InterruptedException ex) {
-					LOGGER.error("VM was not created or has errors, please check your vcenter and your configuration");
-					LOGGER.error("Message: " + ex.getMessage());
-					if (ex.getMessage() == null) {
-						ex.printStackTrace();
-					}
-					VCenterClient.disconnect();
-					return;
-				}
-			} else {
-				try {
-					// No vm template defined, building a new vm from scratch,
-					// there
-					// is no os system installed on..
-					LOGGER.info("Creating the Virtual Machine from scratch : " + vmName);
-					int cKey = 1000;
-
-					String diskMode = null;
-					for (AttributeState attrState : mainStorage.getAttributes()) {
-						if (attrState.getName().equalsIgnoreCase("diskmode")) {
-							diskMode = attrState.getValue();
+					// Get the network name.
+					for (NetworkinterfaceConnector netInt : netInterfaceConn) {
+						NetworkConnector networkConn = (NetworkConnector) netInt.getTarget();
+						if (networkConn != null) {
+							networkName = ((NetworkConnector) netInt.getTarget()).getLabel();
 						}
-					}
-					if (diskMode == null) {
-						// mode: persistent|independent_persistent,
-						// independent_nonpersistent
-						LOGGER.warn("Default diskmode setted to persistent");
-						diskMode = "persistent";
-					}
+						if (networkConn == null || networkName == null || networkName.trim().isEmpty()) {
 
-					// Disk size in kiloBytes.
-					Float diskSize = mainStorage.getSize();
-					Long diskSizeGB = diskSize.longValue();
-					if (diskSizeGB == 0L) {
-						LOGGER.error("The main disk size must be > 0 in GigaBytes");
-						VCenterClient.disconnect();
-						return;
-					}
-					Long diskSizeKB = diskSizeGB * 1024 * 1024;
-					VirtualDeviceConfigSpec scsiSpec = VMHelper.createScsiSpec(cKey);
-					VirtualDeviceConfigSpec diskSpec = VMHelper.createDiskSpec(this.getDatastoreName(), cKey,
-							diskSizeKB, diskMode);
-
-					// Network part : VM Network.
-					// We use predefined network interface (from host).
-
-					// Get the virtual network interface name.
-					NetworkConnector netConnector = null;
-					List<NetworkinterfaceConnector> networkinterfaces = this.getNetworkInterfaceConnectors();
-					if (networkinterfaces.isEmpty()) {
-						// Searching an existing network device on host.
-						LOGGER.info(
-								"No network interfaces defined, searching for a network on host : " + host.getName());
-
-						Network network = allocator.allocateNetwork();
-						if (network == null) {
-							LOGGER.error(
-									"No host networks is available for this virtual machine, please setup a new network in vcenter.");
-							VCenterClient.disconnect();
-							return;
-						}
-						netName = network.getName();
-					} else {
-						// Get the name netinterface.
-						for (NetworkinterfaceConnector netInt : networkinterfaces) {
-							netName = netInt.getTitle();
-							if (netInt.getSource() instanceof NetworkConnector) {
-								netConnector = (NetworkConnector) netInt.getSource();
-							} else {
-								netConnector = (NetworkConnector) netInt.getTarget();
+							Network network = allocator.allocateNetwork();
+							if (network == null) {
+								LOGGER.error(
+										"No virtual networks is available for this virtual machine, please setup a new network in vcenter.");
+								VCenterClient.disconnect();
+								return;
 							}
-							break;
+							networkName = network.getName();
+						} else {
+							// Check if this network exist.
+							if (!NetworkHelper.isHostNetworkExist(networkName, host)) {
+								// We create the vSwitch and port group.
+								String vSwitchName = networkConn.getTitle();
+								String macAddress = null;
+								// TODO : ipAddress CIDR and subnetmask
+								// association with vswitch ??? No informations
+								// about that. Searching....
+								String dhcp = networkConn.getAttributeValueByOcciKey("occi.network.allocation");
+								boolean dhcpMode = true;
+								if (dhcp != null) {
+									if (dhcp.equals("static")) {
+										dhcpMode = false;
+									}
+								}
+								// TODO : To replace when a solution is found
+								// for cidr addresses with network.
+								dhcpMode = true;
+								NetworkHelper.createVSwitch(vSwitchName, networkName, 8, networkConn.getVlan(), host,
+										macAddress, null, null, dhcpMode);
+							}
 						}
+
+						VirtualDeviceConfigSpec deviceConf = NetworkHelper.createNicSpec(networkName, netInt.getTitle(),
+								"generated", netInt.getAttributeValueByOcciKey("occi.networkinterface.address"));
+						nicSpecs.add(deviceConf);
+						// Add networks specs to device change.
+						vmSpec.setDeviceChange((VirtualDeviceConfigSpec[]) nicSpecs.toArray());
 					}
+				}
 
-					// if (netConnector == null) {
-					// LOGGER.error("You must setup a virtual network");
-					// VCenterClient.disconnect();
-					// return;
-					// }
-					//
-					// if (netName == null) {
-					// LOGGER.error("You must set a network interface name");
-					// VCenterClient.disconnect();
-					// return;
-					// }
+				// Create vm file info for vmx file.
+				VirtualMachineFileInfo vmfi = new VirtualMachineFileInfo();
+				vmfi.setVmPathName("[" + datastoreName + "]");
+				vmSpec.setFiles(vmfi);
 
-					// Get the virtual adapter network name.
-					if (netConnector != null) {
-						nicName = netConnector.getTitle();
-					} else {
-						// Default virtual network name.
-						nicName = "virtual network";
-					}
+				cloneSpec.setConfig(vmSpec);
 
-					// TODO : Check VMWare tools, if no vmware tools, the sdk
-					// will not give the ipv4, nor ipv6 .
-					// + upgrade automaticly VMWare Tools via VIJava.
+				// TODO : Other Network and other storages allocation ref on
+				// designer when vm is created.
+				com.vmware.vim25.mo.Task taskVm = vmTemplate.cloneVM_Task(vmFolder, vmName, cloneSpec);
 
-					// Network configuration.
-					// TODO : Manual configuration mode within mixin ipAddress and ipNetworkInterfaceAddress.
-					VirtualDeviceConfigSpec nicSpec = NetworkHelper.createNicSpec(netName, nicName, NetworkHelper.MODE_NETWORK_ADDRESS_GENERATED, null);
+				// TODO : Monitoring Task in other thread.
+				String result = taskVm.waitForTask();
+				if (result == com.vmware.vim25.mo.Task.SUCCESS) {
+					LOGGER.info("Virtual Machine successfully created from template : " + vmTemplate.getName());
 
-					// if no guest os Id and no template, assume that is an
-					// empty vm
-					// with otherGuest term.
-					if (guestOsId == null) {
-						// No guest os defined nor template on creation.
-						// Setting default to : otherGuest.
-						guestOsId = VirtualMachineGuestOsIdentifier.otherGuest.toString();
-					}
+				} else {
+					LOGGER.error(
+							"VM couldn't be created ! vm name: " + vmName + " from template: " + vmTemplate.getName());
+				}
 
-					// Define the vmSpec configuration object.
-					vmSpec = new VirtualMachineConfigSpec();
-
-					vmSpec.setName(vmName);
-					vmSpec.setAnnotation("VirtualMachine Annotation");
-
-					Float memSizeGB = this.getMemory();
-
-					Long memSizeGBLng = memSizeGB.longValue();
-					Long memSizeMB = memSizeGBLng * 1024;
-
-					if (memSizeGBLng == 0L || this.getCores() == 0) {
-						LOGGER.error("You must set the memory size (in GB) and the number of cores.");
-						VCenterClient.disconnect();
-						return;
-					}
-
-					vmSpec.setMemoryMB(memSizeMB);
-					vmSpec.setNumCPUs(this.getCores());
-					vmSpec.setGuestId(guestOsId);
-					vmSpec.setCpuHotAddEnabled(true);
-					// vmSpec.setCpuHotRemoveEnabled(true);
-					vmSpec.setMemoryHotAddEnabled(true);
-
-					vmSpec.setDeviceChange(new VirtualDeviceConfigSpec[] { scsiSpec, diskSpec, nicSpec });
-					// Create vm file info for vmx file.
-					VirtualMachineFileInfo vmfi = new VirtualMachineFileInfo();
-					vmfi.setVmPathName("[" + datastoreName + "]");
-					vmSpec.setFiles(vmfi);
-
-					ResourcePool rp = (ResourcePool) new InventoryNavigator(datacenter)
-							.searchManagedEntities("ResourcePool")[0];
-
-					vmFolder = datacenter.getVmFolder();
-
-					// Create effectively the vm on folder.
-					com.vmware.vim25.mo.Task taskVm = vmFolder.createVM_Task(vmSpec, rp, host);
-					// TODO : Monitoring task object in other thread. See :
-					// http://benohead.com/vi-java-api-monitoring-task-completion/
-					String result = taskVm.waitForTask();
-					if (result == com.vmware.vim25.mo.Task.SUCCESS) {
-						LOGGER.info("Virtual Machine successfully created !");
-						// Find the values of this vm and update this
-						// compute resource model.
-						// occiRetrieve();
-					} else {
-						LOGGER.info("VM couldn't be created !");
-					}
-
-					// Create vm terminated
-
-				} catch (RemoteException | InterruptedException ex) {
-					LOGGER.error("Cannot create the virtual machine : " + ex.getMessage());
+			} catch (RemoteException | InterruptedException ex) {
+				LOGGER.error("VM was not created or has errors, please check your vcenter and your configuration");
+				LOGGER.error("Message: " + ex.getMessage());
+				if (ex.getMessage() == null) {
 					ex.printStackTrace();
+				}
+				VCenterClient.disconnect();
+				return;
+			}
+		} else {
+			try {
+				// No vm template defined, building a new vm from scratch,
+				// there
+				// is no os system installed on..
+				LOGGER.info("Creating the Virtual Machine from scratch : " + vmName);
+				int cKey = 1000;
+
+				String diskMode = null;
+				// Get the disk mode.
+				// disk mode: persistent|independent_persistent,
+				// independent_nonpersistent
+				for (AttributeState attrState : mainStorage.getAttributes()) {
+					if (attrState.getName().equalsIgnoreCase("occi.storage.vmware.diskmode")) {
+						diskMode = attrState.getValue();
+						break;
+					}
+				}
+				if (diskMode == null) {
+					// mode: persistent|independent_persistent,
+					// independent_nonpersistent
+					LOGGER.warn("Default diskmode setted to persistent");
+					diskMode = "persistent";
+					// Add the attribute to model main storage.
+					AttributeState attrState = createAttribute("occi.storage.vmware.diskmode", "persistent");
+					mainStorage.getAttributes().add(attrState);
+				}
+
+				// Disk size in kiloBytes.
+				Float diskSize = mainStorage.getSize();
+				Long diskSizeGB = diskSize.longValue();
+				if (diskSizeGB == 0L) {
+					LOGGER.error("The main disk size must be > 0 in GigaBytes");
 					VCenterClient.disconnect();
 					return;
 				}
 
-			} // endif vmTemplate exist.
+				Long diskSizeKB = diskSizeGB * 1024 * 1024;
+				VirtualDeviceConfigSpec scsiSpec = VMHelper.createScsiSpec(cKey);
+				VirtualDeviceConfigSpec diskSpec = VMHelper.createDiskSpec(this.getDatastoreName(), cKey, diskSizeKB,
+						diskMode);
 
-			// if (vmFolder != null) {
-			// vm = VMHelper.findVMForName(vmFolder, vmName);
-			// if (vm != null) {
-			// VMHelper.mountGuestVmTools((Folder) vm.getParent(),
-			// this.getTitle());
-			// // assign hot config enabled (default).
-			// VMHelper.hotReconfigEnable((Folder) vm.getParent(),
-			// this.getTitle(), true);
-			// }
-			// }
+				// Network part : VM Network.
+				// We use predefined network interface (from host).
 
-		} // Endif toCreate.
+				// Get the virtual network interface name.
+				String networkName = null;
+
+				if (netInterfaceConn.isEmpty()) {
+					// Searching an existing network device on host.
+					LOGGER.info("No network defined, searching for a network on host : " + host.getName());
+
+					Network network = allocator.allocateNetwork();
+					if (network == null) {
+						LOGGER.error(
+								"No virtual networks is available for this virtual machine, please setup a new network in vcenter.");
+						VCenterClient.disconnect();
+						return;
+					}
+					// TODO : Replace with network vswitch creation part.
+					networkName = network.getName();
+					// createNetworksSpec(networkName, netInterfaceConn);
+
+				} else {
+					// TODO : We could allocate any networks on any adapter
+					// interfaces..
+					// Get the network name.
+					for (NetworkinterfaceConnector netInt : netInterfaceConn) {
+						networkName = ((NetworkConnector) netInt.getTarget()).getLabel();
+						// createNetworksSpecs(networkName, netInt);
+						break;
+					}
+				}
+				String nicName;
+
+				// Get the virtual adapter network name.
+				if (firstConnector != null) {
+					nicName = firstConnector.getTitle();
+				} else {
+					// Default virtual network name.
+					nicName = "virtual network";
+				}
+
+				// TODO : Check VMWare tools, if no vmware tools, the sdk
+				// will not give the ipv4, nor ipv6 .
+				// + upgrade automaticly VMWare Tools via VIJava.
+
+				// Network configuration.
+				// TODO : Manual configuration mode within mixin ipAddress and
+				// ipNetworkInterfaceAddress.
+
+				VirtualDeviceConfigSpec nicSpec = NetworkHelper.createNicSpec(networkName, nicName,
+						NetworkHelper.MODE_NETWORK_ADDRESS_GENERATED, null);
+
+				// if no guest os Id and no template, assume that is an
+				// empty vm
+				// with otherGuest term.
+				if (guestOsId == null) {
+					// No guest os defined nor template on creation.
+					// Setting default to : otherGuest.
+					guestOsId = VirtualMachineGuestOsIdentifier.otherGuest.toString();
+				}
+
+				// Define the vmSpec configuration object.
+				vmSpec = new VirtualMachineConfigSpec();
+
+				vmSpec.setName(vmName);
+				vmSpec.setAnnotation("VirtualMachine Annotation");
+
+				Float memSizeGB = this.getMemory();
+
+				Long memSizeGBLng = memSizeGB.longValue();
+				Long memSizeMB = memSizeGBLng * 1024;
+
+				if (memSizeGBLng == 0L || this.getCores() == 0) {
+					LOGGER.error("You must set the memory size (in GB) and the number of cores.");
+					VCenterClient.disconnect();
+					return;
+				}
+
+				vmSpec.setMemoryMB(memSizeMB);
+
+				// If attribute occi.compute.vcpu is setted, we calculate the nb
+				// cores per socket.
+				assignVCpuToVMSpec();
+
+				vmSpec.setGuestId(guestOsId);
+				vmSpec.setCpuHotAddEnabled(true);
+				// vmSpec.setCpuHotRemoveEnabled(true);
+				vmSpec.setMemoryHotAddEnabled(true);
+
+				vmSpec.setDeviceChange(new VirtualDeviceConfigSpec[] { scsiSpec, diskSpec, nicSpec });
+				// Create vm file info for vmx file.
+				VirtualMachineFileInfo vmfi = new VirtualMachineFileInfo();
+				vmfi.setVmPathName("[" + datastoreName + "]");
+				vmSpec.setFiles(vmfi);
+
+				ResourcePool rp = (ResourcePool) new InventoryNavigator(datacenter)
+						.searchManagedEntities("ResourcePool")[0];
+
+				vmFolder = datacenter.getVmFolder();
+
+				// Create effectively the vm on folder.
+				com.vmware.vim25.mo.Task taskVm = vmFolder.createVM_Task(vmSpec, rp, host);
+				// TODO : Monitoring task object in other thread. See :
+				// http://benohead.com/vi-java-api-monitoring-task-completion/
+				String result = taskVm.waitForTask();
+				if (result == com.vmware.vim25.mo.Task.SUCCESS) {
+					LOGGER.info("Virtual Machine successfully created !");
+					// Find the values of this vm and update this
+					// compute resource model.
+					// occiRetrieve();
+				} else {
+					LOGGER.info("VM couldn't be created !");
+				}
+
+				// Create vm terminated
+
+			} catch (RemoteException | InterruptedException ex) {
+				LOGGER.error("Cannot create the virtual machine : " + ex.getMessage());
+				ex.printStackTrace();
+				VCenterClient.disconnect();
+				return;
+			}
+
+		} // endif vmTemplate exist.
+
+		// if (vmFolder != null) {
+		// vm = VMHelper.findVMForName(vmFolder, vmName);
+		// if (vm != null) {
+		// VMHelper.mountGuestVmTools((Folder) vm.getParent(),
+		// this.getTitle());
+		// // assign hot config enabled (default).
+		// VMHelper.hotReconfigEnable((Folder) vm.getParent(),
+		// this.getTitle(), true);
+		// }
+		// }
+
+		// } // Endif toCreate.
+
 		occiRetrieve();
 		// In all case invoke a disconnect from vcenter.
 		VCenterClient.disconnect();
@@ -678,7 +819,8 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		}
 
 		// Load the compute information from vCenter.
-		Integer numCpu = VMHelper.getNumCPU(vm);
+		Integer numCores = VMHelper.getCoreNumber(vm);
+
 		Float memoryGB = VMHelper.getMemoryGB(vm);
 		String architecture = VMHelper.getArchitecture(vm);
 		Float speed = VMHelper.getCPUSpeed(vm);
@@ -691,15 +833,113 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		} else {
 			this.setArchitecture(Architecture.X86);
 		}
-		this.setCores(numCpu);
+		this.setCores(numCores);
 		this.setMemory(memoryGB);
 		this.setSpeed(speed);
 		this.setState(defineStatus(vmState));
 		if (hostname != null) {
 			this.setHostname(hostname);
 		}
-		
-		
+
+		// Get the related entity and update or create them if not declared on
+		// designer.
+
+		// Storage part.
+		List<StoragelinkConnector> storageLinks = this.getLinkedStorages();
+		// Get the storages from vm and check if there are designed, if yes,
+		// update entity, if not designed, entity for storage are created and
+		// updated..
+		Map<String, VirtualDisk> disks = VolumeHelper.getVirtualDiskForVM(vm);
+
+		for (Map.Entry<String, VirtualDisk> entry : disks.entrySet()) {
+			// format: [datastoreName] filename.vmdk
+			String diskName = entry.getKey();
+			String tmp = diskName.replace(".vmdk", "");
+			String tampon[] = tmp.split("]");
+			String datastoreStorage = tampon[0].substring(1);
+
+			tampon = tampon[1].split("/");
+			diskName = tampon[tampon.length - 1];
+
+			VirtualDisk disk = entry.getValue();
+			
+			// Check if the disk is on designer..
+			StorageConnector storageConnector = getStorageConnectorInLinks(diskName, storageLinks);
+			StoragelinkConnector storageLinkConnector;
+			if (storageLinks.isEmpty() || storageConnector == null) {
+				// Create the resource entity and the link.
+				LOGGER.info("Creating a new StorageConnector...");
+				
+				storageConnector = createStorageConnector(diskName);
+				
+				storageConnector.setDatastoreName(datastoreStorage);
+				storageConnector.setSummary(datastoreStorage);
+
+				// Create the link
+				storageLinkConnector = createStorageLinkConnector(storageConnector);
+
+			} else {
+
+				// Get the corresponding link.
+				storageLinkConnector = getStorageLink(diskName, storageLinks);
+				storageConnector.setDatastoreName(datastoreStorage);
+				storageConnector.setSummary(datastoreStorage);
+
+				// If the link doesnt exit create it.
+				if (storageLinkConnector == null) {
+					storageLinkConnector = createStorageLinkConnector(storageConnector);
+				}
+
+			}
+			
+			if (storageLinkConnector != null) {
+				// Retrieve link value this will update the storageConnector
+				// object before (in target).
+				storageLinkConnector.occiRetrieve();
+				
+			}
+
+		} // end for each entry disk.
+
+		// if (this.getState().equals(ComputeStatus.ACTIVE)) {
+			// Networks (switch, port group and nic) part.
+			List<NetworkinterfaceConnector> networkLinks = this.getNetworkInterfaces();
+			// Must disconnect here, the number of vcenter max query may be achieve and the risk is to fail query.
+			VCenterClient.disconnect();
+			VCenterClient.checkConnection();
+			List<VirtualEthernetCard> vEths = NetworkHelper.getNetworkAdaptersForVM(vmName);
+
+			for (VirtualEthernetCard vEth : vEths) {
+				String networkName = vEth.getDeviceInfo().getSummary();
+				String nicName = vEth.getDeviceInfo().getLabel();
+				LOGGER.info("Network name: " + networkName);
+				LOGGER.info("network Adapter name: " + nicName);
+				// Check if the virtual switch (+ port group) is on designer.
+				// Note
+				// that it use one port group for one switch.
+				NetworkConnector networkConn = getNetworkConnectorInLinks(networkName, networkLinks);
+				NetworkinterfaceConnector netIntConn;
+				
+				if (networkLinks.isEmpty() || networkConn == null) {
+					// Create the ressource entity and the linked interface
+					// adapter.
+					networkConn = createNetworkConnector(networkName);
+					
+					// Create the link
+					netIntConn = createNetworkInterfaceConnector(nicName, networkConn);
+				} else {
+					// Get the corresponding link.
+					netIntConn = getNetworkInterface(nicName, networkLinks);
+					if (netIntConn == null) {
+						netIntConn = createNetworkInterfaceConnector(nicName, networkConn);
+					}
+				}
+				if (netIntConn != null) {
+					netIntConn.occiRetrieve();
+				}
+
+			} // End for each virtual network devices.
+//		}
 		// In the end we disconnect.
 		VCenterClient.disconnect();
 	}
@@ -795,8 +1035,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 
 		// Reset status to poweroff by default inactive.
 		this.setState(ComputeStatus.INACTIVE);
-		
-		
+
 		// In the end we disconnect.
 		VCenterClient.disconnect();
 	}
@@ -837,7 +1076,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 			// in the other case we start the compute.
 			VMHelper.powerOn(vm);
 		}
-		
+
 		occiRetrieve();
 		// In the end we disconnect.
 		VCenterClient.disconnect();
@@ -887,7 +1126,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 				break;
 			}
 		}
-		
+
 		occiRetrieve();
 
 		// In the end we disconnect.
@@ -940,7 +1179,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 				VMHelper.powerOn(vm);
 				// TODO : TaskInfo controller to check the updated status.
 				this.setState(ComputeStatus.ACTIVE);
-				
+
 				break;
 			case COLD:
 				if (vmPowerState.equals(VMHelper.SUSPENDED)) {
@@ -951,7 +1190,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 				this.setState(ComputeStatus.INACTIVE);
 				VMHelper.powerOn(vm);
 				this.setState(ComputeStatus.ACTIVE);
-				
+
 				break;
 			case WARM:
 				if (vmPowerState.equals(VMHelper.SUSPENDED)) {
@@ -963,7 +1202,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 			}
 		}
 		occiRetrieve();
-		
+
 		// In the end we disconnect.
 		VCenterClient.disconnect();
 	}
@@ -1011,7 +1250,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 				break;
 			}
 		}
-		
+
 		occiRetrieve();
 		// In the end we disconnect.
 		VCenterClient.disconnect();
@@ -1045,7 +1284,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		VMHelper.markAsTemplate(vm);
 
 		vm = VMHelper.loadVirtualMachine(vmName);
-		
+
 		occiRetrieve();
 		// In the end we disconnect.
 		VCenterClient.disconnect();
@@ -1075,6 +1314,14 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 */
 	public void setDatacenterName(String datacenterName) {
 		this.datacenterName = datacenterName;
+		if (this.getAttributeValueByOcciKey("occi.compute.vmware.datacentername") == null) {
+			AttributeState attr = createAttribute("occi.compute.vmware.datacentername", datacenterName);
+			this.getAttributes().add(attr);
+		} else {
+			// Update the attribute.
+			AttributeState attr = getAttributeStateObject("occi.compute.vmware.datacentername");
+			attr.setValue(datacenterName);
+		}
 	}
 
 	/**
@@ -1083,6 +1330,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 * @return
 	 */
 	public String getDatastoreName() {
+
 		return datastoreName;
 	}
 
@@ -1093,6 +1341,14 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 */
 	public void setDatastoreName(String datastoreName) {
 		this.datastoreName = datastoreName;
+		if (this.getAttributeValueByOcciKey("occi.compute.vmware.datastorename") == null) {
+			AttributeState attr = createAttribute("occi.compute.vmware.datastorename", datastoreName);
+			this.getAttributes().add(attr);
+		} else {
+			// Update the attribute.
+			AttributeState attr = getAttributeStateObject("occi.compute.vmware.datastorename");
+			attr.setValue(datastoreName);
+		}
 	}
 
 	/**
@@ -1111,6 +1367,16 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 */
 	public void setClusterName(String clusterName) {
 		this.clusterName = clusterName;
+
+		if (this.getAttributeValueByOcciKey("occi.compute.vmware.clustername") == null) {
+			AttributeState attr = createAttribute("occi.compute.vmware.clustername", clusterName);
+			this.getAttributes().add(attr);
+		} else {
+			// Update the attribute.
+			AttributeState attr = getAttributeStateObject("occi.compute.vmware.clustername");
+			attr.setValue(clusterName);
+		}
+
 	}
 
 	public String getHostSystemName() {
@@ -1119,44 +1385,15 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 
 	public void setHostSystemName(String hostSystemName) {
 		this.hostSystemName = hostSystemName;
+		if (this.getAttributeValueByOcciKey("occi.compute.vmware.hostsystemname") == null) {
+			AttributeState attr = createAttribute("occi.compute.vmware.hostsystemname", hostSystemName);
+			this.getAttributes().add(attr);
+		} else {
+			// Update the attribute.
+			AttributeState attr = getAttributeStateObject("occi.compute.vmware.hostsystemname");
+			attr.setValue(hostSystemName);
+		}
 	}
-
-	// /**
-	// * Get from attributes OS_TPL and return value.
-	// *
-	// * @return
-	// */
-	// private String getOsTpl() {
-	// String osTpl = null;
-	// for (AttributeState attrState : this.getAttributes()) {
-	// if (attrState.getName().equalsIgnoreCase("os_tpl")) {
-	// osTpl = attrState.getValue();
-	// break;
-	// }
-	// }
-	//
-	// return osTpl;
-	// }
-
-	// /**
-	// * if vcenter client connection is not set, this method will connect to
-	// * vcenter.
-	// */
-	// private boolean checkConnection() {
-	// if (!VCenterClient.isConnected()) {
-	// try {
-	// VCenterClient.init();
-	// VCenterClient.connect();
-	// return true;
-	// } catch (IOException ex) {
-	// LOGGER.error(ex.getMessage());
-	// return false;
-	// }
-	// } else {
-	// return true;
-	// }
-	//
-	// }
 
 	/**
 	 * Get Main storage link (link on main disk).
@@ -1165,17 +1402,12 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 *         null value is returned.
 	 */
 	private StoragelinkConnector getMainStorageLink() {
-		EList<Link> links = this.getLinks();
-		
-		List<StoragelinkConnector> storageLinks = new ArrayList<>();
+
+		List<StoragelinkConnector> storageLinks = getLinkedStorages();
 		StoragelinkConnector mainStorageLink = null;
-		for (Link link : links) {
-			if (link instanceof StoragelinkConnector) {
-				storageLinks.add((StoragelinkConnector) link);
-			}
-		}
+
 		int storageLinkSize = storageLinks.size();
-		
+
 		// Detect where's the main disk.
 		for (StoragelinkConnector stLink : storageLinks) {
 			if (storageLinkSize == 1 || (stLink.getMountpoint() != null && (stLink.getMountpoint().equals("/")
@@ -1184,7 +1416,7 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 				break;
 			}
 		}
-		
+
 		return mainStorageLink;
 	}
 
@@ -1195,38 +1427,23 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 *         the main storageLink).
 	 */
 	private List<StoragelinkConnector> getOtherStorageLink() {
-		EList<Link> links = this.getLinks();
-		List<StoragelinkConnector> storageLinks = new ArrayList<>();
+
+		List<StoragelinkConnector> storageLinks = getLinkedStorages();
+		List<StoragelinkConnector> stOthers = new ArrayList<>();
 		StoragelinkConnector stMain = getMainStorageLink();
 		StoragelinkConnector stOther = null;
-		for (Link link : links) {
-			if (link instanceof StoragelinkConnector && stMain != null) {
+		for (StoragelinkConnector link : storageLinks) {
+			if (stMain != null) {
 				stOther = (StoragelinkConnector) link;
 				if (!stOther.equals(stMain)) {
-					storageLinks.add(stOther);
+					stOthers.add(stOther);
 				}
+			} else {
+				// St main is null, return all the storagelinks.
+				stOthers.add(link);
 			}
 		}
 		return storageLinks;
-	}
-
-	/**
-	 * We get here the network connector.
-	 * 
-	 * @return
-	 */
-	private List<NetworkinterfaceConnector> getNetworkInterfaceConnectors() {
-		EList<Link> links = this.getLinks();
-		List<NetworkinterfaceConnector> netInts = new ArrayList<>();
-		NetworkinterfaceConnector netInt;
-		for (Link link : links) {
-			if (link instanceof NetworkinterfaceConnector) {
-				netInt = (NetworkinterfaceConnector) link;
-				netInts.add(netInt);
-			}
-		}
-		return netInts;
-
 	}
 
 	/**
@@ -1240,19 +1457,582 @@ public class ComputeConnector extends org.occiware.clouddesigner.occi.infrastruc
 		switch (vmwarePowerState) {
 		case VMHelper.POWER_ON:
 			status = ComputeStatus.ACTIVE;
+			LOGGER.info("vm status is active.");
+
 			break;
 		case VMHelper.POWER_OFF:
 			status = ComputeStatus.INACTIVE;
+			LOGGER.info("vm status is inactive");
 			break;
 		case VMHelper.SUSPENDED:
 			status = ComputeStatus.SUSPENDED;
+			LOGGER.info("vm status is suspended.");
+
 			break;
 		default:
 			status = ComputeStatus.ERROR;
+			LOGGER.info("vm status error.");
 		}
 
 		return status;
 
 	}
-	
+
+	/**
+	 * Get the linked storages.
+	 * 
+	 * @return a list of storagelink or empty if none.
+	 */
+	private List<StoragelinkConnector> getLinkedStorages() {
+		List<StoragelinkConnector> storages = new ArrayList<>();
+
+		List<Link> links = this.getLinks();
+		for (Link link : links) {
+			if (link instanceof StoragelinkConnector) {
+				StoragelinkConnector storage = (StoragelinkConnector) link;
+				storages.add(storage);
+			}
+		}
+
+		return storages;
+	}
+
+	/**
+	 * Get the network interfaces from designer.
+	 * 
+	 * @return a list of interfaces or empty if none.
+	 */
+	private List<NetworkinterfaceConnector> getNetworkInterfaces() {
+		List<NetworkinterfaceConnector> interfaces = new ArrayList<>();
+
+		List<Link> links = this.getLinks();
+		for (Link link : links) {
+			if (link instanceof NetworkinterfaceConnector) {
+				NetworkinterfaceConnector adapter = (NetworkinterfaceConnector) link;
+				interfaces.add(adapter);
+			}
+		}
+
+		return interfaces;
+	}
+
+	/**
+	 * get attribute value with his occi key, deserve when no property value
+	 * set, with Mixin attribute as it is defined by Cloud designer.
+	 * 
+	 * @param key
+	 * @return an attribute value, null if no one is found.
+	 */
+	public String getAttributeValueByOcciKey(String key) {
+		String value = null;
+		if (key == null) {
+			return value;
+		}
+
+		List<AttributeState> attrs = this.getAttributes();
+		for (AttributeState attr : attrs) {
+			if (attr.getName().equals(key)) {
+				value = attr.getValue();
+				break;
+			}
+		}
+
+		return value;
+
+	}
+
+	private void assignVCpuToVMSpec() {
+		int nbCore = this.getCores();
+		int vcpus = 0;
+		String vCpuStr = this.getAttributeValueByOcciKey("occi.compute.vcpu");
+		if (vCpuStr != null && !vCpuStr.trim().isEmpty()) {
+			try {
+				vcpus = Integer.valueOf(vCpuStr);
+			} catch (NumberFormatException ex) {
+				LOGGER.error("Vcpu is not a number, please set the attribute to an integer value.");
+				vcpus = 0;
+			}
+		}
+		if (nbCore < 2) {
+			if (vcpus == 0) {
+				vmSpec.setNumCPUs(1);
+				vmSpec.setNumCoresPerSocket(1);
+			} else {
+				vmSpec.setNumCPUs(vcpus);
+				vmSpec.setNumCoresPerSocket(vcpus);
+			}
+
+		} else {
+			vmSpec.setNumCPUs(vcpus);
+			vmSpec.setNumCoresPerSocket(vcpus / nbCore);
+		}
+	}
+
+	/**
+	 * Create an attribute without add this to the current connector object.
+	 * 
+	 * @param name
+	 * @param value
+	 * @return AttributeState object.
+	 */
+	public AttributeState createAttribute(final String name, final String value) {
+		AttributeState attr = OCCIFactory.eINSTANCE.createAttributeState();
+		attr.setName(name);
+		attr.setValue(value);
+		return attr;
+	}
+
+	// Examples of customization spec.
+	public CustomizationSpec createLinuxCustomization(final String ipAddress, final String gateway) {
+
+		// Create customization specs/linux specific options
+		CustomizationSpec customSpec = new CustomizationSpec();
+
+		CustomizationLinuxOptions linuxOptions = new CustomizationLinuxOptions();
+		customSpec.setOptions(linuxOptions);
+		CustomizationLinuxPrep linuxPrep = new CustomizationLinuxPrep();
+		// linuxPrep.setDomain(domain); // TODO : Domain name ?
+		// linuxPrep.setHwClockUTC(true);
+		// linuxPrep.setTimeZone("Europe/London"); // TODO : TimeZone...
+
+		CustomizationFixedName fixedName = new CustomizationFixedName();
+		fixedName.setName(getHostname());
+		linuxPrep.setHostName(fixedName);
+
+		CustomizationFixedIp fixedIp = new CustomizationFixedIp();
+		CustomizationDhcpIpGenerator dhcpGenerator = new CustomizationDhcpIpGenerator();
+		boolean dynamicNetworkAllocation = false;
+		if (ipAddress != null && !ipAddress.isEmpty()) {
+			fixedIp.setIpAddress(ipAddress);
+		} else {
+			// Dynamic allocation, dhcp mode.
+			dynamicNetworkAllocation = true;
+		}
+
+		// TODO : Dns global ip settings.
+		// CustomizationGlobalIPSettings globalIPSettings = new
+		// CustomizationGlobalIPSettings();
+		// globalIPSettings.setDnsServerList(new String[]{"8.8.8.8",
+		// "8.8.4.4"});
+		// globalIPSettings.setDnsSuffixList(new
+		// String[]{"search.com","my.search.com"});
+		// customSpec.setGlobalIPSettings(globalIPSettings);
+
+		CustomizationIPSettings customizationIPSettings = new CustomizationIPSettings();
+		if (dynamicNetworkAllocation) {
+			customizationIPSettings.setIp(dhcpGenerator);
+		} else {
+			customizationIPSettings.setIp(fixedIp);
+		}
+		if (gateway != null && !gateway.isEmpty()) {
+			customizationIPSettings.setGateway(new String[] { gateway });
+		} else {
+			// Set a default gateway.
+			customizationIPSettings.setGateway(new String[] { "192.168.1.1" });
+		}
+
+		// TODO : submask network :
+		// customizationIPSettings.setSubnetMask("255.255.0.0");
+		CustomizationAdapterMapping adapterMapping = new CustomizationAdapterMapping();
+		adapterMapping.setAdapter(customizationIPSettings);
+
+		// TODO : create a method createSpecFromConnector in networkinterface,
+		// networkconnector, storageconnector and storagelinkconnector.
+		// and get the spec from other connectors.
+		CustomizationAdapterMapping[] adapterMappings = new CustomizationAdapterMapping[] { adapterMapping };
+		customSpec.setNicSettingMap(adapterMappings);
+
+		// CustomizationLinuxOptions linuxOptions = new
+		// CustomizationLinuxOptions();
+		// customSpec.setOptions(linuxOptions);
+		//
+		// CustomizationLinuxPrep linuxPrep = new CustomizationLinuxPrep();
+		// linuxPrep.setDomain("example.domain.com");
+		// linuxPrep.setHwClockUTC(true);
+		// linuxPrep.setTimeZone("Europe/London");
+		//
+		// CustomizationFixedName fixedName = new CustomizationFixedName();
+		// fixedName.setName("cloned-machine-hostname");
+		// linuxPrep.setHostName(fixedName);
+		// customSpec.setIdentity(linuxPrep);
+		//
+		// //Network related settings
+		// CustomizationGlobalIPSettings globalIPSettings = new
+		// CustomizationGlobalIPSettings();
+		// globalIPSettings.setDnsServerList(new String[]{"8.8.8.8",
+		// "8.8.4.4"});
+		// globalIPSettings.setDnsSuffixList(new
+		// String[]{"search.com","my.search.com"});
+		// customSpec.setGlobalIPSettings(globalIPSettings);
+		//
+		// CustomizationFixedIp fixedIp = new CustomizationFixedIp();
+		// fixedIp.setIpAddress("192.168.10.1");
+		//
+		// CustomizationIPSettings customizationIPSettings = new
+		// CustomizationIPSettings();
+		// customizationIPSettings.setIp(fixedIp);
+		// customizationIPSettings.setGateway(new String[]{"192.168.1.1"});
+		// customizationIPSettings.setSubnetMask("255.255.0.0");
+		//
+		// CustomizationAdapterMapping adapterMapping = new
+		// CustomizationAdapterMapping();
+		// adapterMapping.setAdapter(customizationIPSettings);
+		//
+		// CustomizationAdapterMapping[] adapterMappings = new
+		// CustomizationAdapterMapping[]{adapterMapping};
+		// customSpec.setNicSettingMap(adapterMappings);
+
+		return customSpec;
+	}
+
+	public static CustomizationSpec createWindowsCustomization() {
+		// Windows needs valid product key in order to create fully working
+		// clone. Otherwise you will get error message
+		// when machine is cloned
+		String productID = "XXXXX-XXXXX-XXXXXX-XXXXX";
+
+		VirtualMachineCloneSpec cloneSpec = new VirtualMachineCloneSpec();
+
+		// Set location of clone to be the same as template (Datastore)
+		cloneSpec.setLocation(new VirtualMachineRelocateSpec());
+
+		// Clone is not powered on, not a template.
+		cloneSpec.setPowerOn(false);
+		cloneSpec.setTemplate(false);
+
+		// Create customization specs/win specific options
+		// Windows are using SYSPREP for these kind of stuff
+		CustomizationSpec customSpec = new CustomizationSpec();
+		CustomizationWinOptions winOptions = new CustomizationWinOptions();
+
+		winOptions.setChangeSID(true);
+		// We don't want our preconfigured users to be deleted
+		winOptions.setDeleteAccounts(false);
+
+		customSpec.setOptions(winOptions);
+		CustomizationSysprep sprep = new CustomizationSysprep();
+
+		CustomizationGuiUnattended guiUnattended = new CustomizationGuiUnattended();
+		guiUnattended.setAutoLogon(false);
+		guiUnattended.setAutoLogonCount(0);
+		guiUnattended.setTimeZone(4);
+		sprep.setGuiUnattended(guiUnattended);
+
+		CustomizationIdentification custIdent = new CustomizationIdentification();
+		custIdent.setJoinWorkgroup("WORKGROUP");
+		sprep.setIdentification(custIdent);
+
+		CustomizationUserData custUserData = new CustomizationUserData();
+		CustomizationFixedName fixedName = new CustomizationFixedName();
+		fixedName.setName("windows-clone");
+
+		// set from cloned machine
+		custUserData.setProductId(productID); // REQUIRED FOR Windows
+		custUserData.setComputerName(fixedName);
+		custUserData.setFullName("windows-clone.example.com");
+		custUserData.setOrgName("example.com");
+
+		sprep.setUserData(custUserData);
+		customSpec.setIdentity(sprep);
+
+		// Network related settings
+		CustomizationGlobalIPSettings globalIPSettings = new CustomizationGlobalIPSettings();
+		globalIPSettings.setDnsServerList(new String[] { "8.8.8.8", "8.8.4.4" });
+		globalIPSettings.setDnsSuffixList(new String[] { "example.com" });
+
+		customSpec.setGlobalIPSettings(globalIPSettings);
+		CustomizationFixedIp fixedIp = new CustomizationFixedIp();
+		fixedIp.setIpAddress("192.168.10.2");
+
+		CustomizationIPSettings customizationIPSettings = new CustomizationIPSettings();
+		customizationIPSettings.setIp(fixedIp);
+		customizationIPSettings.setGateway(new String[] { "192.168.1.1" });
+		customizationIPSettings.setSubnetMask("255.255.0.0");
+
+		// Disabling netBIOS
+		customizationIPSettings.setNetBIOS(CustomizationNetBIOSMode.disableNetBIOS);
+		customizationIPSettings.setDnsDomain("example.com");
+
+		CustomizationAdapterMapping adapterMapping = new CustomizationAdapterMapping();
+		adapterMapping.setAdapter(customizationIPSettings);
+
+		CustomizationAdapterMapping[] adapterMappings = new CustomizationAdapterMapping[] { adapterMapping };
+		customSpec.setNicSettingMap(adapterMappings);
+
+		return customSpec;
+	}
+
+	/**
+	 * Get the first network where possible. (ex: eth0)
+	 * 
+	 * @param netInterfaceConn
+	 * @return the first network connector (vSwitch),
+	 */
+	private NetworkConnector getFirstAdapterNetwork(List<NetworkinterfaceConnector> netInterfaceConn) {
+
+		NetworkConnector netConn = null;
+
+		for (NetworkinterfaceConnector netInt : netInterfaceConn) {
+			if (netInt.getInterface().equals("eth0")) {
+				netConn = (NetworkConnector) netInt.getTarget();
+				break;
+			}
+			if (netInt.getTitle() != null) {
+				if (netInt.getTitle().contains("Adaptateur réseau 1")
+						|| netInt.getTitle().contains("Network adapter 1")) {
+					netConn = (NetworkConnector) netInt.getTarget();
+					break;
+				}
+			}
+
+		}
+		return netConn;
+	}
+
+	/**
+	 * Get an attribute state object for key parameter.
+	 * 
+	 * @param key
+	 *            ex: occi.core.title.
+	 * @return an AttributeState object, if attribute doesnt exist, null value
+	 *         is returned.
+	 */
+	private AttributeState getAttributeStateObject(final String key) {
+		AttributeState attr = null;
+		if (key == null) {
+			return attr;
+		}
+		// Load the corresponding attribute state.
+		for (AttributeState attrState : this.getAttributes()) {
+			if (attrState.getName().equals(key)) {
+				attr = attrState;
+				break;
+			}
+		}
+
+		return attr;
+	}
+
+	/**
+	 * Get the storage connector from a diskname and a list of storage links.
+	 * 
+	 * @param diskName
+	 * @param storageLinks
+	 * @return {@link StorageConnector} object.
+	 */
+	private StorageConnector getStorageConnectorInLinks(final String diskName,
+			List<StoragelinkConnector> storageLinks) {
+		StorageConnector result = null;
+		for (StoragelinkConnector storageLink : storageLinks) {
+			Resource target = storageLink.getTarget();
+			if (target != null && target instanceof StorageConnector) {
+				// Check if title is the disk name.
+				String title = target.getTitle();
+				if (title.equals(diskName)) {
+					result = (StorageConnector) target;
+					break;
+				}
+			}
+		}
+
+		return result;
+
+	}
+
+	/**
+	 * Get a storagelinkconnector from a list of storage link connector.
+	 * 
+	 * @param name
+	 * @param stLinks
+	 * @return a {@link StoragelinkConnector} object, null if not found.
+	 */
+	private StoragelinkConnector getStorageLink(String name, List<StoragelinkConnector> stLinks) {
+
+		StoragelinkConnector storageLink = null;
+		for (StoragelinkConnector conn : stLinks) {
+			if (conn.getTitle().equals(name)) {
+				storageLink = conn;
+				break;
+			}
+		}
+		return storageLink;
+	}
+
+	/**
+	 * Create entity storageLinkConnector with link set.
+	 * 
+	 * @param storageConnector
+	 * @return a new {@link StoragelinkConnector} object with link on source and
+	 *         target set.
+	 */
+	private StoragelinkConnector createStorageLinkConnector(StorageConnector storageConnector) {
+
+		Configuration config = OcciHelper.getConfiguration(this);
+		StoragelinkConnector stLink = null;
+
+		EList<Extension> extensions = config.getUse();
+		Extension currentExt = null;
+		for (Extension ext : extensions) {
+			if (ext.getName().equalsIgnoreCase("infrastructure")) {
+				currentExt = ext;
+				break;
+			}
+		}
+		if (currentExt != null) {
+			Kind stLinkKind = OcciHelper.getKindByTerm(currentExt, "storagelink");
+			Entity entity = OcciHelper.createEntity(stLinkKind);
+			stLink = (StoragelinkConnector) entity;
+			stLink.setTitle(storageConnector.getTitle()); // It is temporary
+															// that, occi
+															// retrieve will
+															// retrieve the
+															// volumeName from
+															// the operating
+															// system.
+			stLink.setSource(this);
+			stLink.setTarget(storageConnector);
+			
+		}
+
+		return stLink;
+	}
+
+	/**
+	 * Create a storage entity without link.
+	 * 
+	 * @param diskName
+	 * @return a new {@link StorageConnector} entity.
+	 */
+	private StorageConnector createStorageConnector(String diskName) {
+		Configuration config = OcciHelper.getConfiguration(this);
+		StorageConnector conn = null;
+		EList<Extension> extensions = config.getUse();
+		Extension currentExt = null;
+		for (Extension ext : extensions) {
+			if (ext.getName().equalsIgnoreCase("infrastructure")) {
+				currentExt = ext;
+				break;
+			}
+		}
+		if (currentExt != null) {
+			Kind stKind = OcciHelper.getKindByTerm(currentExt, "storage");
+			Entity entity = OcciHelper.createEntity(stKind);
+			conn = (StorageConnector) entity;
+			conn.setTitle(diskName); // It is temporary that, occi retrieve will
+										// retrieve the volumeName from the
+										// operating system.
+			conn.getAttributes();
+			config.getResources().add(conn);
+		}
+		return conn;
+	}
+
+	/**
+	 * Get a network connector from linked network interfaces.
+	 * 
+	 * @param networkName
+	 * @param networkLinks
+	 * @return a {@link NetworkConnector} entity object.
+	 */
+	private NetworkConnector getNetworkConnectorInLinks(final String networkName,
+			List<NetworkinterfaceConnector> networkLinks) {
+		NetworkConnector netConn = null;
+		for (NetworkinterfaceConnector networkInt : networkLinks) {
+			Resource target = networkInt.getTarget();
+			if (target != null && target instanceof NetworkConnector) {
+				// Check if title is the disk name.
+				String label = target.getTitle();
+				if (label.equals(networkName)) {
+					netConn = (NetworkConnector) target;
+					break;
+				}
+			}
+		}
+
+		return netConn;
+
+	}
+
+	/**
+	 * Create a new {@link NetworkConnector} entity with title set to
+	 * networkName, without links.
+	 * 
+	 * @param networkName
+	 * @return a new {@link NetworkConnector}
+	 */
+	private NetworkConnector createNetworkConnector(final String networkName) {
+		Configuration config = OcciHelper.getConfiguration(this);
+		NetworkConnector conn = null;
+		EList<Extension> extensions = config.getUse();
+		Extension currentExt = null;
+		for (Extension ext : extensions) {
+			if (ext.getName().equalsIgnoreCase("infrastructure")) {
+				currentExt = ext;
+				break;
+			}
+		}
+		if (currentExt != null) {
+			Kind stKind = OcciHelper.getKindByTerm(currentExt, "network");
+			Entity entity = OcciHelper.createEntity(stKind);
+			conn = (NetworkConnector) entity;
+			conn.setLabel(networkName);
+			config.getResources().add(conn);
+		}
+		return conn;
+
+	}
+
+	/**
+	 * Create a new {@link NetworkinterfaceConnector} with links set from this
+	 * compute to the networkConnector in parameter.
+	 * 
+	 * @param nicName
+	 * @param networkConn
+	 * @return a {@link NetworkinterfaceConnector} with links set.
+	 */
+	private NetworkinterfaceConnector createNetworkInterfaceConnector(final String nicName,
+			NetworkConnector networkConn) {
+		Configuration config = OcciHelper.getConfiguration(this);
+
+		NetworkinterfaceConnector netIntConn = null;
+
+		EList<Extension> extensions = config.getUse();
+		Extension currentExt = null;
+		for (Extension ext : extensions) {
+			if (ext.getName().equalsIgnoreCase("infrastructure")) {
+				currentExt = ext;
+				break;
+			}
+		}
+		if (currentExt != null) {
+			Kind stLinkKind = OcciHelper.getKindByTerm(currentExt, "networkinterface");
+			Entity entity = OcciHelper.createEntity(stLinkKind);
+			netIntConn = (NetworkinterfaceConnector) entity;
+			netIntConn.setTitle(nicName);
+			netIntConn.setSource(this);
+			netIntConn.setTarget(networkConn);
+		}
+		return netIntConn;
+	}
+
+	/**
+	 * Get the network interface connector from a list of network interfaces and
+	 * a network adapter name.
+	 * 
+	 * @param nicName
+	 * @param networkLinks
+	 * @return a {@link NetworkinterfaceConnector}
+	 */
+	private NetworkinterfaceConnector getNetworkInterface(final String nicName,
+			List<NetworkinterfaceConnector> networkLinks) {
+		NetworkinterfaceConnector networkIntConn = null;
+		for (NetworkinterfaceConnector conn : networkLinks) {
+			if (conn.getTitle().equals(nicName)) {
+				networkIntConn = conn;
+				break;
+			}
+		}
+		return networkIntConn;
+	}
+
 }

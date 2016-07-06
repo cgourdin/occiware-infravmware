@@ -21,7 +21,12 @@ import com.vmware.vim25.mo.Datacenter;
 import com.vmware.vim25.mo.Datastore;
 import com.vmware.vim25.mo.Folder;
 
+import java.util.List;
+
 import org.eclipse.xtext.xtext.ecoreInference.EClassifierInfo.EClassInfo.FindResult;
+import org.occiware.clouddesigner.occi.AttributeState;
+import org.occiware.clouddesigner.occi.OCCIFactory;
+import org.occiware.clouddesigner.occi.Resource;
 import org.occiware.clouddesigner.occi.infrastructure.StorageLinkStatus;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.DatastoreHelper;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VCenterClient;
@@ -77,7 +82,15 @@ public class StoragelinkConnector extends org.occiware.clouddesigner.occi.infras
 		}
 		Folder rootFolder = VCenterClient.getServiceInstance().getRootFolder();
 		// Find a datastore.
-		String datastoreName = this.getTitle();
+		Resource target = this.getTarget();
+		if (target == null) {
+			LOGGER.error("No target storage link for this storagelink.");
+			
+			VCenterClient.disconnect();
+			return;
+		}
+		String datastoreName = target.getSummary();
+		
 		if (datastoreName == null) {
 			LOGGER.error("The datastore name is null, please set title attribute. Cant retrieve datastore.");
 			this.setState(StorageLinkStatus.ERROR);
@@ -96,6 +109,8 @@ public class StoragelinkConnector extends org.occiware.clouddesigner.occi.infras
 		// Assign value.
 		this.setState(StorageLinkStatus.ACTIVE);
 		
+		// Load the storage part.
+		target.occiRetrieve();
 		
 		VCenterClient.disconnect();
 		
@@ -127,5 +142,62 @@ public class StoragelinkConnector extends org.occiware.clouddesigner.occi.infras
 	//
 	// Storagelink actions.
 	//
+	
+	/**
+	 * get attribute value with his occi key, deserve when no property value
+	 * set, with Mixin attribute as it is defined by Cloud designer.
+	 * 
+	 * @param key
+	 * @return an attribute value, null if no one is found.
+	 */
+	public String getAttributeValueByOcciKey(String key) {
+		String value = null;
+		if (key == null) {
+			return value;
+		}
+
+		List<AttributeState> attrs = this.getAttributes();
+		for (AttributeState attr : attrs) {
+			if (attr.getName().equals(key)) {
+				value = attr.getValue();
+				break;
+			}
+		}
+
+		return value;
+
+	}
+	/**
+	 * Create an attribute without add this to the current connector object.
+	 * @param name
+	 * @param value
+	 * @return AttributeState object.
+	 */
+	public AttributeState createAttribute(final String name, final String value) {
+		AttributeState attr = OCCIFactory.eINSTANCE.createAttributeState();
+		attr.setName(name);
+		attr.setValue(value);
+		return attr;	
+	}
+	/**
+     * Get an attribute state object for key parameter.
+     * @param key ex: occi.core.title.
+     * @return an AttributeState object, if attribute doesnt exist, null value is returned.
+     */
+    private AttributeState getAttributeStateObject(final String key) {
+    	AttributeState attr = null;
+    	if (key == null) {
+    		return attr;
+    	}
+    	// Load the corresponding attribute state.
+    	for (AttributeState attrState : this.getAttributes()) {
+    		if (attrState.getName().equals(key)) {
+    			attr = attrState;
+    			break;
+    		}
+    	}
+    	
+    	return attr;
+    }
 
 }	
