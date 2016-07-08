@@ -395,6 +395,14 @@ public class NetworkHelper {
 	}
 	
 	
+	public static HostVirtualSwitch findVSwitch(HostSystem host, String vSwitchName) {
+		HostVirtualSwitch vSwitch = null;
+		// host.getHostNetworkSystem().getConsoleIpRouteConfig().
+		
+		return vSwitch;
+	}
+	
+	
 	/**
 	 * Action up on network adapter on vm.
 	 * @param vm

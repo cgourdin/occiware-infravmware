@@ -14,20 +14,13 @@
  */
 package org.occiware.clouddesigner.occi.infrastructure.connector.vmware;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import com.vmware.vim25.mo.Datacenter;
-import com.vmware.vim25.mo.Datastore;
-import com.vmware.vim25.mo.Folder;
-import com.vmware.vim25.mo.ManagedEntity;
-import com.vmware.vim25.mo.ServiceInstance;
-
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import org.eclipse.emf.common.util.EList;
 import org.occiware.clouddesigner.occi.AttributeState;
+import org.occiware.clouddesigner.occi.Configuration;
 import org.occiware.clouddesigner.occi.Link;
 import org.occiware.clouddesigner.occi.OCCIFactory;
 import org.occiware.clouddesigner.occi.Resource;
@@ -43,6 +36,16 @@ import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.Dat
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VCenterClient;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VMHelper;
 import org.occiware.clouddesigner.occi.infrastructure.connector.vmware.utils.VolumeHelper;
+import org.occiware.clouddesigner.occi.util.OcciHelper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.vmware.vim25.VirtualDisk;
+import com.vmware.vim25.mo.Datacenter;
+import com.vmware.vim25.mo.Datastore;
+import com.vmware.vim25.mo.Folder;
+import com.vmware.vim25.mo.ServiceInstance;
+import com.vmware.vim25.mo.VirtualMachine;
 
 /**
  * Connector implementation for the OCCI kind: - scheme:
@@ -93,16 +96,13 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 
 		AllocatorImpl allocator = new AllocatorImpl(rootFolder);
 
-		StoragelinkConnector stLink;
-		EList<Link> links = this.getLinks();
-		List<ComputeConnector> computes = new ArrayList<>();
-		if (links.isEmpty()) {
-			LOGGER.warn("No storage link found, the volume is not linked to a compute.");
+		List<ComputeConnector> computes = getLinkedComputes();
+
+		if (computes.isEmpty()) {
+			LOGGER.warn("the volume is not linked to a compute.");
 		} else {
-			// Search for a datastore name on links.
-			this.setDatastoreName(this.findDatastoreNameOnLinks());
-			// Get the linked computes instance.
-			computes = this.getLinkedComputes();
+			// Search for a datastore name on attribute.
+			this.setDatastoreName(this.getDatastoreName());
 		}
 
 		Float size = this.getSize();
@@ -161,6 +161,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 
 		// Create a new disk with or with or without vm information.
 		VolumeHelper.createVolume(datacenterName, datastoreName, volumeName, this.getSize());
+
 		occiRetrieve();
 		// In all case invoke a disconnect from vcenter.
 		VCenterClient.disconnect();
@@ -192,18 +193,14 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 				this.setMessage("Cant locate a datastore for this storage disk.");
 				VCenterClient.disconnect();
 				return;
-			} else {
-				this.setDatastoreName(datastore.getName());
-			}
+			} 
 			if (datacenter == null) {
 				LOGGER.error("Cant locate a datacenter for this storage disk.");
 				this.setState(StorageStatus.ERROR);
 				this.setMessage("Cant locate a datacenter for this storage disk.");
 				VCenterClient.disconnect();
 				return;
-			} else {
-				this.setDatacenterName(datacenter.getName());
-			}
+			} 
 		}
 
 		// Check if the volume name has changed, if this is the case, the
@@ -227,6 +224,7 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		// Update disk information on screen.
 		try {
 			this.setMessage(null);
+
 			if (!VolumeHelper.isExistVolumeForName(datastoreName, volumeName, datacenterName, vmName)) {
 				LOGGER.error("Cant find the disk on vcenter, there's no disk with the name : " + volumeName);
 				this.setState(StorageStatus.ERROR);
@@ -571,11 +569,8 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 */
 	public String getDatacenterName() {
 		if (datacenterName == null) {
-			// TODO : Search with mixin (or resources, depends on the
-			// infrastructure extension choice).
-
+			datacenterName = getAttributeValueByOcciKey("occi.storage.vmware.datacenter");
 		}
-
 		return datacenterName;
 	}
 
@@ -586,6 +581,13 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 */
 	public void setDatacenterName(String datacenterName) {
 		this.datacenterName = datacenterName;
+		if (getAttributeValueByOcciKey("occi.storage.vmware.datacenter") == null) {
+			AttributeState attr = this.createAttribute("occi.storage.vmware.datacenter", datacenterName);
+			this.getAttributes().add(attr);
+		} else {
+			AttributeState attr = this.getAttributeStateObject("occi.storage.vmware.datacenter");
+			attr.setValue(datacenterName);
+		}
 	}
 
 	/**
@@ -594,6 +596,10 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 * @return
 	 */
 	public String getDatastoreName() {
+		if (datastoreName == null) {
+			datastoreName = getAttributeValueByOcciKey("occi.storage.vmware.datastore");
+		}
+
 		return datastoreName;
 	}
 
@@ -604,6 +610,14 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 */
 	public void setDatastoreName(String datastoreName) {
 		this.datastoreName = datastoreName;
+		if (getAttributeValueByOcciKey("occi.storage.vmware.datastore") == null) {
+			AttributeState attr = this.createAttribute("occi.storage.vmware.datastore", datastoreName);
+			this.getAttributes().add(attr);
+		} else {
+			AttributeState attr = this.getAttributeStateObject("occi.storage.vmware.datastore");
+			attr.setValue(datastoreName);
+		}
+
 	}
 
 	/**
@@ -613,48 +627,31 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 	 */
 	private List<ComputeConnector> getLinkedComputes() {
 
-		EList<Link> links = this.getLinks();
-		List<ComputeConnector> computes = new ArrayList<>();
+		List<ComputeConnector> computes = new ArrayList<ComputeConnector>();
 
-		Resource source;
-		Resource target;
-		ComputeConnector instance;
-		for (Link link : links) {
-			source = link.getSource();
-			target = link.getTarget();
+		// As the links are not bidirectional, we search on configuration object
+		// the entities connected to this storage.
 
-			if (source != null && source instanceof ComputeConnector) {
-				instance = (ComputeConnector) source;
-				computes.add(instance);
-			}
-			if (target != null && target instanceof ComputeConnector) {
-				instance = (ComputeConnector) target;
-				computes.add(instance);
-			}
-		}
-
-		return computes;
-	}
-
-	/**
-	 * Find a datastore name on first storageLinks, title attribute.
-	 * 
-	 * @return a datastoreName if found, null if no links found or title
-	 *         attribute on storageLink is null or empty.
-	 */
-	private String findDatastoreNameOnLinks() {
-		String dsName = null;
-		for (Link link : this.getLinks()) {
-			if (link instanceof StoragelinkConnector) {
-				dsName = link.getTitle();
-				if (dsName != null && dsName.isEmpty()) {
-					dsName = null;
-					continue;
+		Configuration config = OcciHelper.getConfiguration(this);
+		List<Resource> resources = config.getResources();
+		List<Link> resLinks;
+		for (Resource resource : resources) {
+			if (resource instanceof ComputeConnector) {
+				resLinks = resource.getLinks();
+				for (Link link : resLinks) {
+					Resource target = link.getTarget();
+					if (target != null && target instanceof StorageConnector) {
+						StorageConnector storage = (StorageConnector) target;
+						if (storage.equals(this)) {
+							// Linked to this object.
+							ComputeConnector compute = (ComputeConnector) resource;
+							computes.add(compute);
+						}
+					}
 				}
-				break;
 			}
 		}
-		return dsName;
+		return computes;
 	}
 
 	/**
@@ -665,70 +662,148 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		Folder rootFolder = VCenterClient.getServiceInstance().getRootFolder();
 
 		// Search for linked computes.
-		List<ComputeConnector> computes = new ArrayList<ComputeConnector>();
-		if (this.getLinks().isEmpty()) {
-			LOGGER.warn("No storage link found, the volume " + this.getTitle() + " is not linked to a compute.");
-		} else {
-			// Search for a datastore name on links.
-			this.setDatastoreName(this.findDatastoreNameOnLinks());
-			// Get the linked computes instance.
-			computes = this.getLinkedComputes();
-			// Take the first compute.
-			for (ComputeConnector compute : computes) {
-				if (compute.getTitle() != null) {
-					vmName = compute.getTitle();
-					if (datacenterName == null) {
-						datacenterName = compute.getDatacenterName();
-						datastoreName = compute.getDatastoreName();
-					}
-					break;
-				}
-			}
-			// Search for a datastore name on links.
-			if (datastoreName == null) {
-				this.setDatastoreName(this.findDatastoreNameOnLinks());
-			}
-		}
 
+		List<ComputeConnector> computes = getLinkedComputes();
+		// Load the datastore.
 		if (datastoreName != null) {
-			// Load datastore object.
 			datastore = DatastoreHelper.findDatastoreForName(rootFolder, datastoreName);
-			// Search the datacenter with revert list of datastores.
-			datacenter = DatacenterHelper.findDatacenterFromDatastore(rootFolder, datastoreName);
-
-			if (datacenter == null) {
-				throw new DatacenterNotFoundException(
-						"Cannot retrieve datacenter, cause: datacenter not found for the datastore: "
-								+ datastore.getName());
-			}
-			
 			if (datastore == null) {
 				throw new DatastoreNotFoundException(
 						"Cant locate a datastore, cause: datastore is referenced but not found on vcenter, name of the datastore: "
 								+ datastoreName);
 			}
-
 		} else {
-			// Datastore is null, we must assign a datacenter and a
-			// datastore to continue.
-			// if at least one is not found.
-			if (datastore == null || datacenter == null) {
-				if (datacenter == null) {
-					throw new DatacenterNotFoundException("Cant locate a datacenter, cause : no available datacenter.");
+			// search on computes the virtual disk that represent this storage,
+			// and get the corresponding datastore.
+			for (ComputeConnector compute : computes) {
+				// Load the vm.
+				String vmNameTmp = compute.getTitle();
+				VirtualMachine vm = VMHelper.findVMForName(rootFolder, vmNameTmp);
+				Map<String, VirtualDisk> vdisks = VolumeHelper.getVirtualDiskForVM(vm);
+				VirtualDisk vdiskOut = null;
+				if (vdisks != null && !vdisks.isEmpty()) {
+					// search the virtualdisk corresponding ref.
+					for (Map.Entry<String, VirtualDisk> entry : vdisks.entrySet()) {
+						String diskName = entry.getKey();
+						String tmp = diskName.replace(".vmdk", "");
+						String tampon[] = tmp.split("]");
+						datastoreName = tampon[0].substring(1);
+
+						tampon = tampon[1].split("/");
+						diskName = tampon[tampon.length - 1];
+						if (diskName.equals(this.getTitle())) {
+							vdiskOut = entry.getValue();
+							break;
+						}
+					}
+
 				}
-				if (datastore == null) {
-					throw new DatastoreNotFoundException("Cant locate a datastore, cause: no available datastore.");
+				if (datastoreName != null) {
+					// add the attribute to persist value in addition.
+					this.setDatastoreName(datastoreName);
+				}
+				if (vmName == null) {
+					vmName = compute.getTitle();
 				}
 			}
+
 		}
-		if (datacenter != null) {
+
+		datacenter = DatacenterHelper.findDatacenterFromDatastore(rootFolder, datastoreName);
+		if (datacenter == null) {
+			throw new DatacenterNotFoundException(
+					"Cannot retrieve datacenter, cause: datacenter not found for the datastore: "
+							+ datastore.getName());
+		} else {
+			
 			this.setDatacenterName(datacenter.getName());
+
 		}
-		if (datastore != null) {
-			this.setDatastoreName(datastore.getName());
+		if (vmName == null) {
+			for (ComputeConnector compute : computes) {
+				vmName = compute.getTitle();
+				break;
+			}
 		}
-		
+
+		//
+		//
+		//
+		// if (computes.isEmpty()) {
+		// LOGGER.warn("No storage link found, the volume " + this.getTitle() +
+		// " is not linked to a compute.");
+		// } else {
+		// // Search for a datastore name on links.
+		// if (datastoreName == null) {
+		// this.setDatastoreName(this.findDatastoreNameOnAttribute());
+		// }
+		// // Take the first compute.
+		// for (ComputeConnector compute : computes) {
+		// if (compute.getTitle() != null) {
+		// vmName = compute.getTitle();
+		// if (datacenterName == null) {
+		// datacenterName = compute.getDatacenterName();
+		//
+		// if (datastoreName == null) {
+		// datastoreName = compute.getDatastoreName();
+		// }
+		//
+		// }
+		// break;
+		// }
+		// }
+		// // Search for a datastore name on links.
+		// if (datastoreName == null) {
+		// this.setDatastoreName(this.findDatastoreNameOnAttribute());
+		// }
+		// }
+		//
+		// if (datastoreName != null) {
+		// // Load datastore object.
+		// datastore = DatastoreHelper.findDatastoreForName(rootFolder,
+		// datastoreName);
+		// // Search the datacenter with revert list of datastores.
+		// datacenter = DatacenterHelper.findDatacenterFromDatastore(rootFolder,
+		// datastoreName);
+		//
+		// if (datacenter == null) {
+		// throw new DatacenterNotFoundException(
+		// "Cannot retrieve datacenter, cause: datacenter not found for the
+		// datastore: "
+		// + datastore.getName());
+		// }
+		//
+		// if (datastore == null) {
+		// throw new DatastoreNotFoundException(
+		// "Cant locate a datastore, cause: datastore is referenced but not
+		// found on vcenter, name of the datastore: "
+		// + datastoreName);
+		// }
+		//
+		// } else {
+		// // Datastore is null, we must assign a datacenter and a
+		// // datastore to continue.
+		// // if at least one is not found.
+		// if (datastore == null || datacenter == null) {
+		// if (datacenter == null) {
+		// throw new DatacenterNotFoundException("Cant locate a datacenter,
+		// cause : no available datacenter.");
+		// }
+		// if (datastore == null) {
+		// throw new DatastoreNotFoundException("Cant locate a datastore, cause:
+		// no available datastore.");
+		// }
+		// }
+		// }
+		// if (datacenter != null) {
+		// this.setDatacenterName(datacenter.getName());
+		// }
+		// if (datastore != null) {
+		// this.setDatastoreName(datastore.getName());
+		// }
+
 	}
+
 	/**
 	 * get attribute value with his occi key, deserve when no property value
 	 * set, with Mixin attribute as it is defined by Cloud designer.
@@ -753,8 +828,10 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		return value;
 
 	}
+
 	/**
 	 * Create an attribute without add this to the current connector object.
+	 * 
 	 * @param name
 	 * @param value
 	 * @return AttributeState object.
@@ -763,27 +840,39 @@ public class StorageConnector extends org.occiware.clouddesigner.occi.infrastruc
 		AttributeState attr = OCCIFactory.eINSTANCE.createAttributeState();
 		attr.setName(name);
 		attr.setValue(value);
-		return attr;	
+		return attr;
 	}
+
 	/**
-     * Get an attribute state object for key parameter.
-     * @param key ex: occi.core.title.
-     * @return an AttributeState object, if attribute doesnt exist, null value is returned.
-     */
-    private AttributeState getAttributeStateObject(final String key) {
-    	AttributeState attr = null;
-    	if (key == null) {
-    		return attr;
-    	}
-    	// Load the corresponding attribute state.
-    	for (AttributeState attrState : this.getAttributes()) {
-    		if (attrState.getName().equals(key)) {
-    			attr = attrState;
-    			break;
-    		}
-    	}
-    	
-    	return attr;
-    }
+	 * Get an attribute state object for key parameter.
+	 * 
+	 * @param key
+	 *            ex: occi.core.title.
+	 * @return an AttributeState object, if attribute doesnt exist, null value
+	 *         is returned.
+	 */
+	private AttributeState getAttributeStateObject(final String key) {
+		AttributeState attr = null;
+		if (key == null) {
+			return attr;
+		}
+		// Load the corresponding attribute state.
+		for (AttributeState attrState : this.getAttributes()) {
+			if (attrState.getName().equals(key)) {
+				attr = attrState;
+				break;
+			}
+		}
+
+		return attr;
+	}
+
+	public String getVmName() {
+		return vmName;
+	}
+
+	public void setVmName(String vmName) {
+		this.vmName = vmName;
+	}
 
 }

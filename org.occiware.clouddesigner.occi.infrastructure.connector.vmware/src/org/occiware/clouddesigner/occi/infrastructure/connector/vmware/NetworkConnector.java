@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
 
 import com.vmware.vim25.Description;
 import com.vmware.vim25.GuestNicInfo;
+import com.vmware.vim25.HostPortGroup;
 import com.vmware.vim25.MethodFault;
 import com.vmware.vim25.TaskInfo;
 import com.vmware.vim25.TaskInfoState;
@@ -30,6 +31,7 @@ import com.vmware.vim25.VirtualMachineConfigSpec;
 import com.vmware.vim25.mo.Folder;
 import com.vmware.vim25.mo.HostSystem;
 import com.vmware.vim25.mo.Network;
+import com.vmware.vim25.mo.ServiceInstance;
 import com.vmware.vim25.mo.Task;
 import com.vmware.vim25.mo.VirtualMachine;
 import com.vmware.vim25.mox.VirtualMachineDeviceManager;
@@ -114,7 +116,11 @@ public class NetworkConnector extends org.occiware.clouddesigner.occi.infrastruc
 			// Must return true if connection is established.
 			return;
 		}
-		// TODO : Retrieve a network and refresh his linked adapters.
+		List<Mixin> mixins;
+		ServiceInstance si = VCenterClient.getServiceInstance();
+		Folder rootFolder = si.getRootFolder();
+		
+		
 		
 		VCenterClient.disconnect();
 

@@ -12,7 +12,7 @@ Two modes are supported now, the creation of virtual machine without virtual mac
 
 Usage with template : set the attribute "occi.compute.image" with the name of your template and the connector will clone the template on your compute without taking account of other fields (like cpu, memory etc.), set the title as it represent the name of your virtual machine.
 
-Don't forget to add your credentials in src/resources/credential.properties and copy it to your home directory before using this connector.
+Don't forget to add your credentials in src/resources/vmware-credential.properties and copy it to your home directory before using this connector.
 
 Disk usage has been added, you can now create empty disk, create attached disk, attach/detach a disk, delete a disk, resize a disk (only on superior capacity) and rename a disk.
 
